@@ -24,4 +24,5 @@ export const api = {
   verifiers: () => get(`/verifiers`),
   profile: (address) => get(`/profiles/${address}`),
   updateProfile: (address, payload) => put(`/profiles/${address}`, payload),
+  investorPortfolio: (address) => get(`/investors/${address}`),
 };

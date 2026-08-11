@@ -1,35 +1,56 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Header } from "./components/Header";
-import { Marketplace } from "./components/Marketplace";
+import { RoleSelect } from "./components/RoleSelect";
+import { InvestorHome } from "./components/InvestorHome";
 import { DealDetail } from "./components/DealDetail";
 import { BusinessDashboard } from "./components/BusinessDashboard";
 import { VerifierDashboard } from "./components/VerifierDashboard";
 import { useWallet } from "./lib/useWallet";
 
+const ROLE_KEY = "transcend.role";
+
 export default function App() {
-  const [tab, setTab] = useState("marketplace");
+  const [role, setRole] = useState(() => {
+    try {
+      return localStorage.getItem(ROLE_KEY) || null;
+    } catch {
+      return null;
+    }
+  });
   const [openDealId, setOpenDealId] = useState(null);
   const wallet = useWallet();
 
+  useEffect(() => {
+    try {
+      if (role) localStorage.setItem(ROLE_KEY, role);
+      else localStorage.removeItem(ROLE_KEY);
+    } catch {
+      // ignore storage errors (e.g. private browsing)
+    }
+  }, [role]);
+
+  const chooseRole = (r) => {
+    setRole(r);
+    setOpenDealId(null);
+  };
+  const switchRole = () => {
+    setRole(null);
+    setOpenDealId(null);
+  };
+  const goHome = () => setOpenDealId(null);
   const openDeal = (id) => setOpenDealId(id);
-  const backToMarketplace = () => setOpenDealId(null);
 
   return (
     <div className="min-h-screen">
-      <Header
-        tab={tab}
-        setTab={(t) => {
-          setTab(t);
-          setOpenDealId(null);
-        }}
-        wallet={wallet}
-      />
+      <Header role={role} onSwitchRole={switchRole} onGoHome={goHome} wallet={wallet} />
 
-      {openDealId ? (
-        <DealDetail dealId={openDealId} wallet={wallet} onBack={backToMarketplace} />
-      ) : tab === "marketplace" ? (
-        <Marketplace onOpenDeal={openDeal} />
-      ) : tab === "business" ? (
+      {!role ? (
+        <RoleSelect onSelect={chooseRole} />
+      ) : openDealId ? (
+        <DealDetail dealId={openDealId} wallet={wallet} onBack={() => setOpenDealId(null)} />
+      ) : role === "investor" ? (
+        <InvestorHome wallet={wallet} onOpenDeal={openDeal} />
+      ) : role === "business" ? (
         <BusinessDashboard wallet={wallet} onOpenDeal={openDeal} />
       ) : (
         <VerifierDashboard wallet={wallet} onOpenDeal={openDeal} />

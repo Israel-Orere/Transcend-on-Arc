@@ -9,6 +9,7 @@ const businessesRouter = require("./src/routes/businesses");
 const dealsRouter = require("./src/routes/deals");
 const verifiersRouter = require("./src/routes/verifiers");
 const profileRouter = require("./src/routes/profile");
+const investorsRouter = require("./src/routes/investors");
 
 const app = express();
 app.use(cors());
@@ -30,6 +31,7 @@ app.use("/businesses", businessesRouter);
 app.use("/deals", dealsRouter);
 app.use("/verifiers", verifiersRouter);
 app.use("/profiles", profileRouter);
+app.use("/investors", investorsRouter);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
