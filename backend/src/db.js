@@ -1,10 +1,43 @@
-const Database = require("better-sqlite3");
+// Uses Node's built-in SQLite (node:sqlite, stable since Node ~22.5) instead
+// of better-sqlite3. better-sqlite3 is a native module that needs a C++
+// compiler + Python to build on machines without a prebuilt binary for their
+// Node version -- a real barrier for non-developer setups. node:sqlite ships
+// inside Node itself, so `npm install` never needs to compile anything.
+const { DatabaseSync } = require("node:sqlite");
 const path = require("path");
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "..", "transcend.db");
 
-const db = new Database(DB_PATH);
-db.pragma("journal_mode = WAL");
+const rawDb = new DatabaseSync(DB_PATH);
+rawDb.exec("PRAGMA journal_mode = WAL");
+
+// Thin wrapper matching the subset of the better-sqlite3 API this codebase
+// uses (db.exec, db.prepare().get/run/all, db.transaction), so nothing in
+// indexer.js or routes/*.js has to change.
+const db = {
+  exec: (sql) => rawDb.exec(sql),
+  prepare: (sql) => {
+    const stmt = rawDb.prepare(sql);
+    return {
+      get: (...args) => stmt.get(...args),
+      all: (...args) => stmt.all(...args),
+      run: (...args) => stmt.run(...args),
+    };
+  },
+  transaction: (fn) => {
+    return (...args) => {
+      rawDb.exec("BEGIN");
+      try {
+        const result = fn(...args);
+        rawDb.exec("COMMIT");
+        return result;
+      } catch (err) {
+        rawDb.exec("ROLLBACK");
+        throw err;
+      }
+    };
+  },
+};
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS businesses (
