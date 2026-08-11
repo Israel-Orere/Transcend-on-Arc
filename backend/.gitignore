@@ -1,0 +1,6 @@
+node_modules/
+transcend.db
+transcend.db-*
+.env
+.env.local
+deployment.local.json

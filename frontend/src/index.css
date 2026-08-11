@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+@theme {
+  /* Palette: deep indigo market-night base, warm ochre accent (naira/market
+     stalls), verification green, ledger paper, and a muted brick red for
+     risk/default states. Deliberately not cream+terracotta or near-black+neon. */
+  --color-ink: #12233D;
+  --color-ink-soft: #1D3557;
+  --color-ochre: #E0A458;
+  --color-ochre-soft: #F1CE94;
+  --color-verified: #3E7C59;
+  --color-risk: #B5533C;
+  --color-paper: #F7F3EA;
+  --color-paper-dim: #EDE6D6;
+
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+html {
+  background: var(--color-paper);
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--color-ink);
+  background: var(--color-paper);
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+/* Verification stamp: the page's signature element. A hand-stamped circular
+   mark used wherever an independent party (verifier, on-chain payee) has
+   confirmed something -- distinct from a self-reported claim. */
+.stamp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  transform: rotate(-6deg);
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .stamp-in {
+    animation: stamp-in 240ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+  }
+}
+
+@keyframes stamp-in {
+  from {
+    opacity: 0;
+    transform: rotate(-18deg) scale(1.4);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(-6deg) scale(1);
+  }
+}
+
+/* Perforated receipt-stub edge, used on deal cards */
+.stub-edge {
+  background-image: radial-gradient(circle, var(--color-paper) 3px, transparent 3.5px);
+  background-size: 14px 14px;
+  background-position: left center;
+  background-repeat: repeat-y;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ochre);
+  outline-offset: 2px;
+}
