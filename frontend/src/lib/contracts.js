@@ -23,7 +23,32 @@ const ERC20_ABI = [
   },
 ];
 
+// Every write action funnels through here, and every write action re-checks
+// the wallet's active chain first. Checking only once at "Connect wallet"
+// time isn't enough -- MetaMask can lose track of an unrecognized local
+// chain between actions, and the failure then surfaces deep inside
+// writeContract as an opaque "Unrecognized chain ID" error instead of a
+// clear add-network prompt.
+async function ensureWalletOnChain(walletClient) {
+  const targetChain = walletClient.chain;
+  const hexChainId = "0x" + targetChain.id.toString(16);
+  const currentHex = await walletClient.request({ method: "eth_chainId" });
+  if (currentHex.toLowerCase() === hexChainId.toLowerCase()) return;
+
+  try {
+    await walletClient.switchChain({ id: targetChain.id });
+  } catch (err) {
+    if (err.code === 4902 || /Unrecognized chain/i.test(err.message || "")) {
+      await walletClient.addChain({ chain: targetChain });
+      await walletClient.switchChain({ id: targetChain.id });
+    } else {
+      throw err;
+    }
+  }
+}
+
 async function send(walletClient, publicClient, params) {
+  await ensureWalletOnChain(walletClient);
   const account = walletClient.account?.address || (await walletClient.getAddresses())[0];
   const hash = await walletClient.writeContract({ ...params, account });
   return publicClient.waitForTransactionReceipt({ hash });
