@@ -5,6 +5,33 @@ const { businessRegistry: REGISTRY_ADDRESS, investmentPool: POOL_ADDRESS } = loa
 
 const POLL_INTERVAL_MS = Number(process.env.INDEXER_POLL_MS || 3000);
 const MAX_BLOCK_RANGE = 2000n; // chunk large backfills to stay under RPC log-range limits
+const DEPLOYMENT_BLOCK = Math.max(0, Number(process.env.DEPLOYMENT_BLOCK || 0));
+
+async function ensureDeploymentState() {
+  const [chainId, genesis] = await Promise.all([
+    publicClient.getChainId(),
+    publicClient.getBlock({ blockNumber: 0n }),
+  ]);
+  const fingerprint = `${chainId}:${genesis.hash}:${REGISTRY_ADDRESS.toLowerCase()}:${POOL_ADDRESS.toLowerCase()}`;
+  const current = db.prepare("SELECT fingerprint FROM deployment_state WHERE id = 1").get();
+  if (current?.fingerprint === fingerprint) return;
+
+  // Contract addresses are deterministic on a fresh Hardhat chain, so address
+  // comparison alone cannot detect a restart. Reset only indexed/public data;
+  // private applications and profiles survive the local chain reset.
+  db.transaction(() => {
+    for (const table of [
+      "businesses", "verifiers", "supplier_reputations", "supplier_endorsements",
+      "underwriting_reports", "deals", "milestones", "investments", "revenue_reports",
+    ]) db.prepare(`DELETE FROM ${table}`).run();
+    db.prepare("UPDATE indexer_state SET last_block = ? WHERE id = 1").run(Math.max(0, DEPLOYMENT_BLOCK - 1));
+    db.prepare(
+      `INSERT INTO deployment_state (id, fingerprint, updated_at) VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint, updated_at=excluded.updated_at`
+    ).run(fingerprint, Date.now());
+  })();
+  console.log("Indexer detected a new deployment; rebuilt the on-chain cache.");
+}
 
 // ---------- Upsert helpers (refetch full struct from chain, don't trust event args alone) ----------
 
@@ -55,6 +82,65 @@ async function upsertBusiness(address) {
     disbursed_untraceable_usdc: b.disbursedToUntraceablePayeeUSDC.toString(),
     updated_at: Date.now(),
   });
+  await upsertUnderwritingReport(address);
+}
+
+async function upsertUnderwritingReport(address) {
+  const report = await publicClient.readContract({
+    address: REGISTRY_ADDRESS,
+    abi: BusinessRegistryABI,
+    functionName: "getUnderwritingReport",
+    args: [address],
+  });
+  if (!report.underwriter || /^0x0{40}$/i.test(report.underwriter)) return;
+  const verifier = await publicClient.readContract({
+    address: REGISTRY_ADDRESS,
+    abi: BusinessRegistryABI,
+    functionName: "getVerifier",
+    args: [report.underwriter],
+  });
+  db.prepare(
+    `INSERT INTO underwriting_reports (business_address, underwriter_address, underwriter_name,
+       data_room_hash, report_hash, verified_revenue_usdc, gross_profit_usdc, ebitda_usdc,
+       average_monthly_bank_inflows_usdc, existing_debt_usdc, bank_coverage_bps,
+       cash_flow_stability_bps, statement_months, risk_grade, issued_at, valid_until, decision, updated_at)
+     VALUES (@business_address, @underwriter_address, @underwriter_name, @data_room_hash, @report_hash,
+       @verified_revenue_usdc, @gross_profit_usdc, @ebitda_usdc, @average_monthly_bank_inflows_usdc,
+       @existing_debt_usdc, @bank_coverage_bps, @cash_flow_stability_bps, @statement_months,
+       @risk_grade, @issued_at, @valid_until, @decision, @updated_at)
+     ON CONFLICT(business_address) DO UPDATE SET underwriter_address=excluded.underwriter_address,
+       underwriter_name=excluded.underwriter_name, data_room_hash=excluded.data_room_hash,
+       report_hash=excluded.report_hash, verified_revenue_usdc=excluded.verified_revenue_usdc,
+       gross_profit_usdc=excluded.gross_profit_usdc, ebitda_usdc=excluded.ebitda_usdc,
+       average_monthly_bank_inflows_usdc=excluded.average_monthly_bank_inflows_usdc,
+       existing_debt_usdc=excluded.existing_debt_usdc, bank_coverage_bps=excluded.bank_coverage_bps,
+       cash_flow_stability_bps=excluded.cash_flow_stability_bps, statement_months=excluded.statement_months,
+       risk_grade=excluded.risk_grade, issued_at=excluded.issued_at, valid_until=excluded.valid_until,
+       decision=excluded.decision, updated_at=excluded.updated_at`
+  ).run({
+    business_address: address.toLowerCase(),
+    underwriter_address: report.underwriter.toLowerCase(),
+    underwriter_name: verifier.name || "Independent underwriter",
+    data_room_hash: report.dataRoomHash,
+    report_hash: report.reportHash,
+    verified_revenue_usdc: report.verifiedRevenueUSDC.toString(),
+    gross_profit_usdc: report.grossProfitUSDC.toString(),
+    ebitda_usdc: report.ebitdaUSDC.toString(),
+    average_monthly_bank_inflows_usdc: report.averageMonthlyBankInflowsUSDC.toString(),
+    existing_debt_usdc: report.existingDebtUSDC.toString(),
+    bank_coverage_bps: Number(report.bankCoverageBps),
+    cash_flow_stability_bps: Number(report.cashFlowStabilityBps),
+    statement_months: Number(report.statementMonths),
+    risk_grade: Number(report.riskGrade),
+    issued_at: Number(report.issuedAt),
+    valid_until: Number(report.validUntil),
+    decision: Number(report.decision),
+    updated_at: Date.now(),
+  });
+  const applicationStatus = Number(report.decision) === 2 ? "approved"
+    : Number(report.decision) === 3 ? "watchlist" : "declined";
+  db.prepare("UPDATE applications SET status = ?, assigned_underwriter = ?, updated_at = ? WHERE business_address = ?")
+    .run(applicationStatus, report.underwriter.toLowerCase(), Date.now(), address.toLowerCase());
 }
 
 async function upsertVerifier(address) {
@@ -65,17 +151,23 @@ async function upsertVerifier(address) {
     args: [address],
   });
   db.prepare(
-    `INSERT INTO verifiers (address, name, active, attestations_given, attestations_linked_to_default, updated_at)
-     VALUES (@address, @name, @active, @attestations_given, @attestations_linked_to_default, @updated_at)
+    `INSERT INTO verifiers (address, name, active, attestations_given, attestations_linked_to_default,
+       underwriting_reports_published, underwritings_linked_to_default, updated_at)
+     VALUES (@address, @name, @active, @attestations_given, @attestations_linked_to_default,
+       @underwriting_reports_published, @underwritings_linked_to_default, @updated_at)
      ON CONFLICT(address) DO UPDATE SET
         name=excluded.name, active=excluded.active, attestations_given=excluded.attestations_given,
-        attestations_linked_to_default=excluded.attestations_linked_to_default, updated_at=excluded.updated_at`
+        attestations_linked_to_default=excluded.attestations_linked_to_default,
+        underwriting_reports_published=excluded.underwriting_reports_published,
+        underwritings_linked_to_default=excluded.underwritings_linked_to_default, updated_at=excluded.updated_at`
   ).run({
     address: address.toLowerCase(),
     name: v.name,
     active: v.active ? 1 : 0,
     attestations_given: Number(v.attestationsGiven),
     attestations_linked_to_default: Number(v.attestationsLinkedToDefault),
+    underwriting_reports_published: Number(v.underwritingReportsPublished),
+    underwritings_linked_to_default: Number(v.underwritingsLinkedToDefault),
     updated_at: Date.now(),
   });
 }
@@ -161,14 +253,17 @@ async function upsertDeal(dealId, txHash) {
   db.prepare(
     `INSERT INTO deals (deal_id, business_address, target_amount, raised_amount, collateral_amount,
         profit_share_bps, repayment_cap_usdc, total_remitted_usdc, status, current_milestone_index,
-        released_amount, repayments_made, num_repayments, created_at, raising_deadline, paused, tx_hash, updated_at)
+        released_amount, repayments_made, num_repayments, repayment_interval_seconds, next_repayment_due,
+        created_at, raising_deadline, paused, tx_hash, updated_at)
      VALUES (@deal_id, @business_address, @target_amount, @raised_amount, @collateral_amount,
         @profit_share_bps, @repayment_cap_usdc, @total_remitted_usdc, @status, @current_milestone_index,
-        @released_amount, @repayments_made, @num_repayments, @created_at, @raising_deadline, @paused, @tx_hash, @updated_at)
+        @released_amount, @repayments_made, @num_repayments, @repayment_interval_seconds, @next_repayment_due,
+        @created_at, @raising_deadline, @paused, @tx_hash, @updated_at)
      ON CONFLICT(deal_id) DO UPDATE SET
         raised_amount=excluded.raised_amount, status=excluded.status,
         current_milestone_index=excluded.current_milestone_index, released_amount=excluded.released_amount,
         repayments_made=excluded.repayments_made, total_remitted_usdc=excluded.total_remitted_usdc,
+        repayment_interval_seconds=excluded.repayment_interval_seconds, next_repayment_due=excluded.next_repayment_due,
         paused=excluded.paused, updated_at=excluded.updated_at`
   ).run({
     deal_id: Number(dealId),
@@ -184,6 +279,8 @@ async function upsertDeal(dealId, txHash) {
     released_amount: d.releasedAmount.toString(),
     repayments_made: Number(d.repaymentsMade),
     num_repayments: Number(d.numRepayments),
+    repayment_interval_seconds: Number(d.repaymentIntervalSeconds),
+    next_repayment_due: Number(d.nextRepaymentDue),
     created_at: Number(d.createdAt),
     raising_deadline: Number(d.raisingDeadline),
     paused: d.paused ? 1 : 0,
@@ -320,6 +417,10 @@ async function processRegistryLogs(fromBlock, toBlock) {
         touchedBusinesses.add(decoded.args.supplier);
         touchedSuppliers.add(decoded.args.supplier);
         break;
+      case "UnderwritingReportPublished":
+        touchedBusinesses.add(decoded.args.business);
+        touchedVerifiers.add(decoded.args.underwriter);
+        break;
       default:
         break;
     }
@@ -358,6 +459,7 @@ async function processPoolLogs(fromBlock, toBlock) {
 }
 
 async function pollOnce() {
+  await ensureDeploymentState();
   const state = db.prepare("SELECT last_block FROM indexer_state WHERE id = 1").get();
   const fromBlock = BigInt(state.last_block) + 1n;
   const latest = await publicClient.getBlockNumber();
@@ -395,4 +497,6 @@ module.exports = {
   upsertVerifier,
   upsertSupplierReputation,
   upsertSupplierEndorsements,
+  upsertUnderwritingReport,
+  ensureDeploymentState,
 };

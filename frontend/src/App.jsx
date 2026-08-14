@@ -4,7 +4,7 @@ import { RoleSelect } from "./components/RoleSelect";
 import { InvestorHome } from "./components/InvestorHome";
 import { DealDetail } from "./components/DealDetail";
 import { BusinessDashboard } from "./components/BusinessDashboard";
-import { VerifierDashboard } from "./components/VerifierDashboard";
+import { UnderwriterDashboard } from "./components/UnderwriterDashboard";
 import { SupplierDashboard } from "./components/SupplierDashboard";
 import { ProtectionCenter } from "./components/ProtectionCenter";
 import { useWallet } from "./lib/useWallet";
@@ -14,9 +14,9 @@ const ROLE_KEY = "transcend.role";
 export default function App() {
   const [role, setRole] = useState(() => {
     try {
-      return localStorage.getItem(ROLE_KEY) || null;
+      return localStorage.getItem(ROLE_KEY) || "investor";
     } catch {
-      return null;
+      return "investor";
     }
   });
   const [openDealId, setOpenDealId] = useState(null);
@@ -49,6 +49,13 @@ export default function App() {
     <div className="min-h-screen">
       <Header role={role} onSwitchRole={switchRole} onGoHome={goHome} onProtection={() => setShowProtection(true)} wallet={wallet} />
 
+      {wallet.config && !wallet.config.deploymentReady && (
+        <div className="deployment-banner" role="status">
+          <strong>Arc Testnet deployment pending</strong>
+          <span>The hosted interface is on chain ID 5042002, but transactions stay disabled until the registry and pool are deployed.</span>
+        </div>
+      )}
+
       {showProtection ? (
         <ProtectionCenter onBrowse={() => { setShowProtection(false); if (!role) setRole("investor"); }} />
       ) : !role ? (
@@ -62,7 +69,7 @@ export default function App() {
       ) : role === "supplier" ? (
         <SupplierDashboard wallet={wallet} onOpenDeal={openDeal} />
       ) : (
-        <VerifierDashboard wallet={wallet} onOpenDeal={openDeal} />
+        <UnderwriterDashboard wallet={wallet} />
       )}
 
       <footer className="mx-auto max-w-5xl px-5 py-10 text-center text-xs text-ink-soft">

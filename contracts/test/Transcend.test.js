@@ -50,6 +50,23 @@ async function registerAndVerify(registry, admin, business, regHash = ethers.id(
     .connect(business)
     .registerBusiness("Amara Provisions", "Retail", "Lagos", "Nigeria", regHash);
   await registry.connect(admin).verifyBusiness(business.address);
+  const now = (await ethers.provider.getBlock("latest")).timestamp;
+  await registry.connect(admin).publishUnderwritingReport(
+    business.address,
+    ethers.id(`data-room-${business.address}`),
+    ethers.id(`report-${business.address}`),
+    USDC(12_000),
+    USDC(3_600),
+    USDC(1_800),
+    USDC(1_000),
+    USDC(500),
+    9_200,
+    8_100,
+    12,
+    2,
+    now + 180 * DAY,
+    2
+  );
 }
 
 async function reportAndSettle(pool, business, verifier, dealId, grossRevenue, label) {
@@ -88,6 +105,46 @@ describe("BusinessRegistry", function () {
     expect(await registry.reputationTier(business.address)).to.equal(1); // New
     const newCap = await registry.raiseCap(business.address);
     expect(newCap).to.equal(USDC(500));
+  });
+
+  it("requires a current independent underwriting approval before a verified business can raise", async function () {
+    const { registry, admin, business } = await deployFixture();
+    await registry.connect(business).registerBusiness(
+      "Amara Provisions", "Retail", "Lagos", "Nigeria", ethers.id("CAC-UNDERWRITING-GATE")
+    );
+    await registry.connect(admin).verifyBusiness(business.address);
+    expect(await registry.canRaise(business.address)).to.equal(false);
+  });
+
+  it("lets an accountable registered underwriter verify and approve a market listing", async function () {
+    const { registry, verifier, business } = await deployFixture();
+    await registry.connect(business).registerBusiness(
+      "Nuru Foods", "Food processing", "Kaduna", "Nigeria", ethers.id("CAC-UNDERWRITER-APPROVAL")
+    );
+    await registry.connect(verifier).verifyBusiness(business.address);
+    const now = (await ethers.provider.getBlock("latest")).timestamp;
+    await registry.connect(verifier).publishUnderwritingReport(
+      business.address, ethers.id("private-room"), ethers.id("signed-report"),
+      USDC(20_000), USDC(6_000), USDC(2_000), USDC(1_700), USDC(400),
+      9_300, 8_200, 12, 2, now + 180 * DAY, 2
+    );
+    expect(await registry.canRaise(business.address)).to.equal(true);
+    expect((await registry.getVerifier(verifier.address)).underwritingReportsPublished).to.equal(1n);
+  });
+
+  it("blocks a credentialed underwriter from verifying its own business", async function () {
+    const { registry, admin, verifier } = await deployFixture();
+    await registry.connect(verifier).registerBusiness(
+      "Conflict Ventures", "Consulting", "Lagos", "Nigeria", ethers.id("CAC-CONFLICT")
+    );
+    await expect(registry.connect(verifier).verifyBusiness(verifier.address))
+      .to.be.revertedWithCustomError(registry, "NotActiveVerifier");
+    await registry.connect(admin).verifyBusiness(verifier.address);
+    const now = (await ethers.provider.getBlock("latest")).timestamp;
+    await expect(registry.connect(verifier).publishUnderwritingReport(
+      verifier.address, ethers.id("room"), ethers.id("report"), USDC(1000), USDC(500), USDC(100),
+      USDC(90), 0, 9000, 8000, 12, 2, now + 90 * DAY, 2
+    )).to.be.revertedWithCustomError(registry, "InvalidUnderwritingReport");
   });
 
   it("turns supplier upvotes into expiring, evidence-backed commercial endorsements", async function () {

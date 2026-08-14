@@ -12,6 +12,19 @@ export function toUSDCUnits(displayAmount) {
   return BigInt(whole || "0") * 1_000_000n + BigInt(fracPadded || "0");
 }
 
+export function formatCompactUSDC(raw) {
+  const value = Number(BigInt(raw || 0)) / 1_000_000;
+  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
+export function formatPercentBps(bps) {
+  return `${(Number(bps || 0) / 100).toFixed(Number(bps || 0) % 100 ? 1 : 0)}%`;
+}
+
+export function riskGradeLabel(grade) {
+  return ["—", "A", "B", "C", "D", "E"][Number(grade || 0)] || "—";
+}
+
 export function shortAddr(addr) {
   if (!addr) return "";
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;

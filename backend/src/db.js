@@ -6,7 +6,12 @@
 const { DatabaseSync } = require("node:sqlite");
 const path = require("path");
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, "..", "transcend.db");
+// Vercel Functions only expose /tmp as writable storage. On-chain state is
+// rebuilt there from DEPLOYMENT_BLOCK on a cold start. Applications/profiles
+// still require a durable database before this prototype becomes production.
+const DB_PATH = process.env.DB_PATH || (process.env.VERCEL
+  ? path.join("/tmp", "transcend.db")
+  : path.join(__dirname, "..", "transcend.db"));
 
 const rawDb = new DatabaseSync(DB_PATH);
 rawDb.exec("PRAGMA journal_mode = WAL");
@@ -64,6 +69,8 @@ db.exec(`
     active INTEGER DEFAULT 1,
     attestations_given INTEGER DEFAULT 0,
     attestations_linked_to_default INTEGER DEFAULT 0,
+    underwriting_reports_published INTEGER DEFAULT 0,
+    underwritings_linked_to_default INTEGER DEFAULT 0,
     updated_at INTEGER
   );
 
@@ -92,6 +99,52 @@ db.exec(`
     PRIMARY KEY (merchant_address, supplier_address)
   );
 
+  CREATE TABLE IF NOT EXISTS applications (
+    business_address TEXT PRIMARY KEY,
+    status TEXT DEFAULT 'draft',
+    legal_name TEXT,
+    sector TEXT,
+    city TEXT,
+    country TEXT,
+    years_operating INTEGER DEFAULT 0,
+    employees INTEGER DEFAULT 0,
+    requested_usdc TEXT DEFAULT '0',
+    use_of_funds TEXT,
+    maturity_months INTEGER DEFAULT 0,
+    reported_revenue_usdc TEXT DEFAULT '0',
+    reported_gross_profit_usdc TEXT DEFAULT '0',
+    reported_ebitda_usdc TEXT DEFAULT '0',
+    existing_debt_usdc TEXT DEFAULT '0',
+    document_manifest TEXT DEFAULT '[]',
+    assigned_underwriter TEXT,
+    submitted_at INTEGER,
+    updated_at INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS underwriting_reports (
+    business_address TEXT PRIMARY KEY,
+    underwriter_address TEXT,
+    underwriter_name TEXT,
+    data_room_hash TEXT,
+    report_hash TEXT,
+    verified_revenue_usdc TEXT DEFAULT '0',
+    gross_profit_usdc TEXT DEFAULT '0',
+    ebitda_usdc TEXT DEFAULT '0',
+    average_monthly_bank_inflows_usdc TEXT DEFAULT '0',
+    existing_debt_usdc TEXT DEFAULT '0',
+    bank_coverage_bps INTEGER DEFAULT 0,
+    cash_flow_stability_bps INTEGER DEFAULT 0,
+    statement_months INTEGER DEFAULT 0,
+    risk_grade INTEGER DEFAULT 0,
+    issued_at INTEGER,
+    valid_until INTEGER,
+    decision INTEGER DEFAULT 0,
+    summary TEXT,
+    strengths TEXT DEFAULT '[]',
+    risks TEXT DEFAULT '[]',
+    updated_at INTEGER
+  );
+
   CREATE TABLE IF NOT EXISTS deals (
     deal_id INTEGER PRIMARY KEY,
     business_address TEXT,
@@ -106,6 +159,8 @@ db.exec(`
     released_amount TEXT DEFAULT '0',
     repayments_made INTEGER DEFAULT 0,
     num_repayments INTEGER DEFAULT 0,
+    repayment_interval_seconds INTEGER DEFAULT 0,
+    next_repayment_due INTEGER DEFAULT 0,
     created_at INTEGER,
     raising_deadline INTEGER,
     paused INTEGER DEFAULT 0,
@@ -168,6 +223,12 @@ db.exec(`
   );
 
   INSERT OR IGNORE INTO indexer_state (id, last_block) VALUES (1, 0);
+
+  CREATE TABLE IF NOT EXISTS deployment_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    fingerprint TEXT,
+    updated_at INTEGER
+  );
 `);
 
 // Lightweight forward migration for databases created before supplier
@@ -176,6 +237,16 @@ try {
   rawDb.exec("ALTER TABLE businesses ADD COLUMN supplier_verified INTEGER DEFAULT 0");
 } catch (err) {
   if (!String(err.message).includes("duplicate column name")) throw err;
+}
+
+for (const migration of [
+  "ALTER TABLE verifiers ADD COLUMN underwriting_reports_published INTEGER DEFAULT 0",
+  "ALTER TABLE verifiers ADD COLUMN underwritings_linked_to_default INTEGER DEFAULT 0",
+  "ALTER TABLE deals ADD COLUMN repayment_interval_seconds INTEGER DEFAULT 0",
+  "ALTER TABLE deals ADD COLUMN next_repayment_due INTEGER DEFAULT 0",
+]) {
+  try { rawDb.exec(migration); }
+  catch (err) { if (!String(err.message).includes("duplicate column name")) throw err; }
 }
 
 module.exports = db;

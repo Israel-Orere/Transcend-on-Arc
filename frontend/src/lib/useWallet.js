@@ -24,6 +24,9 @@ export function useWallet() {
     setConnecting(true);
     setError(null);
     try {
+      if (!config.deploymentReady || !config.businessRegistry || !config.investmentPool) {
+        throw new Error("The Arc Testnet contracts are awaiting deployment. Wallet transactions are disabled until the public contract addresses are configured.");
+      }
       const provider = getInjectedProvider();
       if (!provider) throw new Error("No injected wallet found. Install MetaMask or a similar wallet.");
       // Request account access FIRST. Some wallets won't reliably surface the

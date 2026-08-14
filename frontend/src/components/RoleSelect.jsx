@@ -19,9 +19,9 @@ const ROLES = [
   },
   {
     id: "verifier",
-    title: "I'm a verifier",
-    blurb: "Review evidence and attest milestones before funds release.",
-    cta: "Go to verifier queue",
+    title: "I'm an underwriter",
+    blurb: "Verify records locally, normalize financials and approve proven businesses for market.",
+    cta: "Open underwriting desk",
   },
 ];
 
