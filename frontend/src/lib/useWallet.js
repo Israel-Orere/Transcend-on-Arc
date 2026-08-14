@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getWalletClient, getPublicClient, ensureCorrectChain, loadRuntimeConfig } from "./chain";
+import { getWalletClient, getPublicClient, ensureCorrectChain, loadRuntimeConfig, getInjectedProvider } from "./chain";
 
 export function useWallet() {
   const [config, setConfig] = useState(null);
@@ -12,10 +12,11 @@ export function useWallet() {
   }, []);
 
   useEffect(() => {
-    if (!window.ethereum) return;
+    const provider = getInjectedProvider();
+    if (!provider) return;
     const handleAccountsChanged = (accounts) => setAddress(accounts[0] || null);
-    window.ethereum.on?.("accountsChanged", handleAccountsChanged);
-    return () => window.ethereum.removeListener?.("accountsChanged", handleAccountsChanged);
+    provider.on?.("accountsChanged", handleAccountsChanged);
+    return () => provider.removeListener?.("accountsChanged", handleAccountsChanged);
   }, []);
 
   const connect = useCallback(async () => {
@@ -23,12 +24,13 @@ export function useWallet() {
     setConnecting(true);
     setError(null);
     try {
-      if (!window.ethereum) throw new Error("No injected wallet found. Install MetaMask or a similar wallet.");
+      const provider = getInjectedProvider();
+      if (!provider) throw new Error("No injected wallet found. Install MetaMask or a similar wallet.");
       // Request account access FIRST. Some wallets won't reliably surface the
       // "add network" approval popup for a site that doesn't have account
       // permission yet, which otherwise looks like the popup silently never
       // appeared.
-      const [acct] = await window.ethereum.request({ method: "eth_requestAccounts" });
+      const [acct] = await provider.request({ method: "eth_requestAccounts" });
       await ensureCorrectChain(config);
       setAddress(acct);
     } catch (err) {

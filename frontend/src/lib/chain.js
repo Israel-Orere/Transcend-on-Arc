@@ -46,21 +46,39 @@ export function getPublicClient(config) {
   return createPublicClient({ chain, transport: http(config.rpcUrl) });
 }
 
+// When multiple wallet extensions are installed, window.ethereum can end up
+// pointing at whichever one loaded last -- not necessarily MetaMask -- which
+// looks exactly like "network not recognized" even after adding it correctly
+// in MetaMask itself. Most wallets that support this expose every injected
+// provider under window.ethereum.providers; prefer the one flagged
+// isMetaMask, and fall back to window.ethereum itself if that array isn't
+// present (single-wallet case).
+export function getInjectedProvider() {
+  if (!window.ethereum) return null;
+  const providers = window.ethereum.providers;
+  if (Array.isArray(providers) && providers.length > 0) {
+    return providers.find((p) => p.isMetaMask) || providers[0];
+  }
+  return window.ethereum;
+}
+
 export function getWalletClient(config) {
-  if (!window.ethereum) throw new Error("No injected wallet found (install MetaMask or similar).");
+  const provider = getInjectedProvider();
+  if (!provider) throw new Error("No injected wallet found (install MetaMask or similar).");
   const chain = buildChain(config);
-  return createWalletClient({ chain, transport: custom(window.ethereum) });
+  return createWalletClient({ chain, transport: custom(provider) });
 }
 
 export async function ensureCorrectChain(config) {
-  if (!window.ethereum) return;
+  const provider = getInjectedProvider();
+  if (!provider) return;
   const chain = buildChain(config);
   const hexChainId = "0x" + chain.id.toString(16);
   try {
-    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hexChainId }] });
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hexChainId }] });
   } catch (err) {
     if (err.code === 4902) {
-      await window.ethereum.request({
+      await provider.request({
         method: "wallet_addEthereumChain",
         params: [
           {
