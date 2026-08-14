@@ -90,6 +90,18 @@ export function VerifierDashboard({ wallet, onOpenDeal }) {
           </div>
         )}
       </div>
+
+      <h2 className="mt-10 font-display text-xl font-semibold">Revenue-report queue</h2>
+      <p className="text-sm text-ink-soft">Attest only after reconciling the committed period against the agreed POS, bank and invoice evidence.</p>
+      <div className="mt-4 space-y-2">
+        {deals.filter((d) => d.status_name === "Repaying").map((d) => (
+          <div key={d.deal_id} className="flex items-center justify-between gap-3 rounded-lg border border-ink/10 bg-white p-3">
+            <button onClick={() => onOpenDeal(d.deal_id)} className="text-left text-sm hover:underline">Deal #{d.deal_id} · reporting period {Number(d.repayments_made || 0) + 1}</button>
+            <button onClick={() => onOpenDeal(d.deal_id)} className="rounded-full border border-ink/20 px-3 py-1.5 text-xs font-medium hover:bg-paper-dim">Open &amp; review evidence</button>
+          </div>
+        ))}
+        {deals.filter((d) => d.status_name === "Repaying").length === 0 && <div className="rounded-xl border border-dashed border-ink/15 px-6 py-8 text-center text-sm text-ink-soft">No revenue periods awaiting review.</div>}
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 // Deploys BusinessRegistry + InvestmentPool to Arc Testnet, wired to Arc's
 // real USDC ERC-20 interface (0x3600...0000 on Arc Testnet, per
-// docs.arc.io/arc/references/contract-addresses). Run with:
+// docs.arc.network). Run with:
 //
 //   PRIVATE_KEY=0x... npm run deploy:arc-testnet
 //
@@ -13,6 +13,9 @@ const hre = require("hardhat");
 const ARC_TESTNET_USDC = "0x3600000000000000000000000000000000000000";
 
 async function main() {
+  if (!process.env.PRIVATE_KEY) {
+    throw new Error("PRIVATE_KEY is required; refusing to deploy with a fallback account");
+  }
   const [deployer] = await hre.ethers.getSigners();
   const network = hre.network.name;
   console.log(`Deploying to network: ${network}`);

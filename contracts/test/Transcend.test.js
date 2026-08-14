@@ -52,6 +52,12 @@ async function registerAndVerify(registry, admin, business, regHash = ethers.id(
   await registry.connect(admin).verifyBusiness(business.address);
 }
 
+async function reportAndSettle(pool, business, verifier, dealId, grossRevenue, label) {
+  await pool.connect(business).submitRevenueReport(dealId, grossRevenue, ethers.id(label));
+  await pool.connect(verifier).attestRevenueReport(dealId);
+  await pool.connect(business).settleRevenueShare(dealId);
+}
+
 describe("BusinessRegistry", function () {
   it("blocks raising until a business is verified", async function () {
     const { registry, business } = await deployFixture();
@@ -83,9 +89,100 @@ describe("BusinessRegistry", function () {
     const newCap = await registry.raiseCap(business.address);
     expect(newCap).to.equal(USDC(500));
   });
+
+  it("turns supplier upvotes into expiring, evidence-backed commercial endorsements", async function () {
+    const { registry, admin, business, supplier } = await deployFixture();
+    await registerAndVerify(registry, admin, business);
+    await registerAndVerify(registry, admin, supplier, ethers.id("CAC-SUPPLIER"));
+    await registry.connect(admin).setSupplierStatus(supplier.address, true);
+
+    const now = (await ethers.provider.getBlock("latest")).timestamp;
+    await registry.connect(supplier).endorseMerchant(
+      business.address,
+      ethers.id("REL-ACCOUNT-102"),
+      ethers.id("INVOICES-Q1-Q2"),
+      18,
+      5,
+      now + 180 * DAY,
+      false
+    );
+
+    const endorsements = await registry.getSupplierEndorsements(business.address);
+    expect(endorsements).to.have.length(1);
+    expect(endorsements[0].supplier).to.equal(supplier.address);
+    expect(endorsements[0].weightAtIssue).to.equal(100n);
+    const [score, count] = await registry.merchantEndorsementScore(business.address);
+    expect(score).to.equal(100n);
+    expect(count).to.equal(1n);
+  });
+
+  it("does not let an ordinary verified merchant impersonate a supplier", async function () {
+    const { registry, admin, business, supplier } = await deployFixture();
+    await registerAndVerify(registry, admin, business);
+    await registerAndVerify(registry, admin, supplier, ethers.id("CAC-NOT-A-SUPPLIER"));
+    const now = (await ethers.provider.getBlock("latest")).timestamp;
+    await expect(
+      registry.connect(supplier).endorseMerchant(
+        business.address, ethers.id("REL"), ethers.id("EVIDENCE"), 12, 5, now + 90 * DAY, false
+      )
+    ).to.be.revertedWithCustomError(registry, "NotVerifiedSupplier");
+  });
+
+  it("discloses related-party endorsements but gives them zero trust weight", async function () {
+    const { registry, admin, business, supplier } = await deployFixture();
+    await registerAndVerify(registry, admin, business);
+    await registerAndVerify(registry, admin, supplier, ethers.id("CAC-RELATED-SUPPLIER"));
+    await registry.connect(admin).setSupplierStatus(supplier.address, true);
+    const now = (await ethers.provider.getBlock("latest")).timestamp;
+
+    await registry.connect(supplier).endorseMerchant(
+      business.address,
+      ethers.id("RELATED-REL"),
+      ethers.id("RELATED-EVIDENCE"),
+      24,
+      5,
+      now + 180 * DAY,
+      true
+    );
+
+    const endorsements = await registry.getSupplierEndorsements(business.address);
+    expect(endorsements[0].relatedParty).to.equal(true);
+    expect(endorsements[0].weightAtIssue).to.equal(0n);
+    const [score, count] = await registry.merchantEndorsementScore(business.address);
+    expect(score).to.equal(0n);
+    expect(count).to.equal(0n);
+  });
+
+  it("rejects endorsement evidence reuse", async function () {
+    const { registry, admin, business, supplier } = await deployFixture();
+    await registerAndVerify(registry, admin, business);
+    await registerAndVerify(registry, admin, supplier, ethers.id("CAC-EVIDENCE-SUPPLIER"));
+    await registry.connect(admin).setSupplierStatus(supplier.address, true);
+    const now = (await ethers.provider.getBlock("latest")).timestamp;
+    const evidence = ethers.id("ONE-INVOICE-BUNDLE");
+
+    await registry.connect(supplier).endorseMerchant(
+      business.address, ethers.id("REL-1"), evidence, 12, 4, now + 90 * DAY, false
+    );
+    await expect(
+      registry.connect(supplier).endorseMerchant(
+        business.address, ethers.id("REL-2"), evidence, 13, 5, now + 120 * DAY, false
+      )
+    ).to.be.revertedWithCustomError(registry, "EndorsementEvidenceReused");
+  });
 });
 
 describe("InvestmentPool - full lifecycle", function () {
+  it("requires a 10% minimum first-loss collateral bond", async function () {
+    const { admin, business, registry, pool } = await deployFixture();
+    await registerAndVerify(registry, admin, business);
+    await expect(
+      pool.connect(business).createDeal(
+        USDC(500), 999, 2000, 30 * DAY, 3, ["Stock"], [USDC(500)], [ethers.ZeroAddress], 0
+      )
+    ).to.be.revertedWithCustomError(pool, "InvalidMilestones");
+  });
+
   it("runs a complete deal: raise -> collateral -> milestone (verifier + payee) -> repay -> complete -> collateral returned", async function () {
     const { admin, verifier, business, supplier, investor1, investor2, investor3, usdc, registry, pool } =
       await deployFixture();
@@ -156,9 +253,9 @@ describe("InvestmentPool - full lifecycle", function () {
     deal = await pool.getDeal(dealId);
     expect(deal.status).to.equal(2); // Repaying
 
-    // --- Profit-share remittances ---
+    // --- Verifier-attested revenue periods: 20% of 100 USDC = 20 USDC due ---
     for (let i = 0; i < 3; i++) {
-      await pool.connect(business).remitProfit(dealId, USDC(20));
+      await reportAndSettle(pool, business, verifier, dealId, USDC(100), `revenue-period-${i}`);
     }
 
     deal = await pool.getDeal(dealId);
@@ -220,9 +317,21 @@ describe("InvestmentPool - full lifecycle", function () {
   });
 
   it("defaults on a missed repayment: forfeits collateral to investors and dents verifier + business reputation", async function () {
-    const { admin, verifier, business, investor1, investor2, investor3, usdc, registry, pool } =
+    const { admin, verifier, business, supplier, investor1, investor2, investor3, usdc, registry, pool } =
       await deployFixture();
     await registerAndVerify(registry, admin, business);
+    await registerAndVerify(registry, admin, supplier, ethers.id("CAC-DEFAULT-ENDORSER"));
+    await registry.connect(admin).setSupplierStatus(supplier.address, true);
+    const now = (await ethers.provider.getBlock("latest")).timestamp;
+    await registry.connect(supplier).endorseMerchant(
+      business.address,
+      ethers.id("DEFAULT-RELATIONSHIP"),
+      ethers.id("DEFAULT-ENDORSEMENT-EVIDENCE"),
+      18,
+      5,
+      now + 180 * DAY,
+      false
+    );
 
     const target = USDC(500);
     await pool
@@ -265,6 +374,9 @@ describe("InvestmentPool - full lifecycle", function () {
 
     const verifierRecord = await registry.getVerifier(verifier.address);
     expect(verifierRecord.attestationsLinkedToDefault).to.equal(1n);
+    const supplierRecord = await registry.getSupplierReputation(supplier.address);
+    expect(supplierRecord.endorsementsLinkedToDefault).to.equal(1n);
+    expect(await registry.supplierReputationWeight(supplier.address)).to.equal(70n);
   });
 
   it("requires an active registry verifier to attest -- a random address cannot", async function () {
@@ -504,12 +616,12 @@ describe("InvestmentPool - full lifecycle", function () {
     await pool.connect(investor2).approveMilestoneRelease(1);
 
     // Two repayments of 30 hit the 60 USDC cap even though numRepayments=5
-    await pool.connect(business).remitProfit(1, USDC(30));
+    await reportAndSettle(pool, business, verifier, 1, USDC(150), "capped-revenue-1");
     let deal = await pool.getDeal(1);
     expect(deal.status).to.equal(2); // still Repaying, cap not hit yet (30 < 60)
 
     const collateralBalBefore = await usdc.balanceOf(business.address);
-    await pool.connect(business).remitProfit(1, USDC(30));
+    await reportAndSettle(pool, business, verifier, 1, USDC(150), "capped-revenue-2");
     deal = await pool.getDeal(1);
     expect(deal.status).to.equal(3); // Completed -- cap hit at exactly 60, schedule (5) not exhausted
     expect(deal.repaymentsMade).to.equal(2n);
@@ -517,5 +629,29 @@ describe("InvestmentPool - full lifecycle", function () {
     // USDC collateral back on completion -> net +20 from this balance snapshot.
     expect(await usdc.balanceOf(business.address)).to.equal(collateralBalBefore + USDC(20));
   });
-});
 
+  it("does not let a merchant choose its own repayment after reporting revenue", async function () {
+    const { admin, verifier, business, investor1, investor2, investor3, registry, pool } = await deployFixture();
+    await registerAndVerify(registry, admin, business);
+    await pool.connect(business).createDeal(
+      USDC(500), 1000, 2000, 30 * DAY, 3, ["Stock"], [USDC(500)], [ethers.ZeroAddress], 0
+    );
+    await pool.connect(investor1).invest(1, USDC(200));
+    await pool.connect(investor2).invest(1, USDC(200));
+    await pool.connect(investor3).invest(1, USDC(100));
+    await pool.connect(business).requestMilestoneRelease(1, ethers.id("revenue-control-milestone"));
+    await pool.connect(verifier).attestMilestone(1);
+    await pool.connect(investor1).approveMilestoneRelease(1);
+    await pool.connect(investor2).approveMilestoneRelease(1);
+
+    await pool.connect(business).submitRevenueReport(1, USDC(250), ethers.id("verified-pos-period-1"));
+    const report = await pool.getRevenueReport(1, 1);
+    expect(report.amountDueUSDC).to.equal(USDC(50)); // contract computes 20%
+    await expect(pool.connect(business).settleRevenueShare(1)).to.be.revertedWithCustomError(
+      pool, "RevenueReportNotAttested"
+    );
+    await pool.connect(verifier).attestRevenueReport(1);
+    await pool.connect(business).settleRevenueShare(1);
+    expect((await pool.getDeal(1)).totalRemittedUSDC).to.equal(USDC(50));
+  });
+});

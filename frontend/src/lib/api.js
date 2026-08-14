@@ -21,6 +21,7 @@ export const api = {
   deal: (id) => get(`/deals/${id}`),
   businesses: () => get(`/businesses`),
   business: (address) => get(`/businesses/${address}`),
+  supplierEndorsements: (address) => get(`/businesses/supplier/${address}/endorsements`),
   verifiers: () => get(`/verifiers`),
   profile: (address) => get(`/profiles/${address}`),
   updateProfile: (address, payload) => put(`/profiles/${address}`, payload),

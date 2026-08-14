@@ -1,7 +1,7 @@
 require("@nomicfoundation/hardhat-toolbox");
 require("dotenv").config();
 
-const PRIVATE_KEY = process.env.PRIVATE_KEY || "0x" + "11".repeat(32);
+const DEPLOYMENT_ACCOUNTS = process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [];
 
 /** @type {import('hardhat/config').HardhatUserConfig} */
 module.exports = {
@@ -27,8 +27,8 @@ module.exports = {
     arcTestnet: {
       url: process.env.ARC_RPC_URL || "https://rpc.testnet.arc.io",
       chainId: 5042002,
-      accounts: [PRIVATE_KEY],
-      // Arc enforces a 20 gwei minimum base fee (see docs.arc.io/arc/references/gas-and-fees)
+      accounts: DEPLOYMENT_ACCOUNTS,
+      // Arc enforces a 20 gwei minimum base fee (see docs.arc.network)
       gasPrice: 20_000_000_000,
     },
   },

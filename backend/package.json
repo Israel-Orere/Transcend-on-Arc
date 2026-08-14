@@ -7,7 +7,7 @@
     "node": ">=22.5.0"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --check index.js && node --check src/db.js && node --check src/indexer.js && node --check src/routes/businesses.js && node --check src/routes/deals.js"
   },
   "keywords": [],
   "author": "",

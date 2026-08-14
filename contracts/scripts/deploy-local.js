@@ -48,6 +48,20 @@ async function main() {
       .registerBusiness("Coastal Wholesale Foods", "Distribution", "Lagos", "Nigeria", hre.ethers.id("CAC-7654321"))
   ).wait();
   await (await registry.verifyBusiness(supplier1.address)).wait();
+  await (await registry.setSupplierStatus(supplier1.address, true)).wait();
+
+  const now = (await hre.ethers.provider.getBlock("latest")).timestamp;
+  await (
+    await registry.connect(supplier1).endorseMerchant(
+      business1.address,
+      hre.ethers.id("Coastal-Amara-trading-relationship"),
+      hre.ethers.id("demo-invoices-and-delivery-notes"),
+      18,
+      5,
+      now + 180 * 24 * 60 * 60,
+      false
+    )
+  ).wait();
 
   // Create and partially fund a demo deal
   const DAY = 24 * 60 * 60;
@@ -57,7 +71,7 @@ async function main() {
       .createDeal(
         USDC(500),
         1000, // 10% collateral
-        2000, // 20% profit share
+        2000, // 20% of independently verified gross collections
         30 * DAY,
         3,
         ["Stock rice & oil from Coastal Wholesale", "Shop refurbishment"],

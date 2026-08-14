@@ -9,6 +9,7 @@ export function BusinessDashboard({ wallet, onOpenDeal }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [justRegistered, setJustRegistered] = useState(false);
 
   const [regForm, setRegForm] = useState({ name: "", category: "", city: "", country: "Nigeria", regNumber: "" });
 
@@ -37,8 +38,6 @@ export function BusinessDashboard({ wallet, onOpenDeal }) {
       </div>
     );
   }
-
-  const [justRegistered, setJustRegistered] = useState(false);
 
   const handleRegister = async () => {
     setBusy(true);
@@ -209,7 +208,7 @@ export function BusinessDashboard({ wallet, onOpenDeal }) {
                   onChange={(v) => setDealForm({ ...dealForm, collateralBps: v })}
                 />
                 <Field
-                  label="Profit share (bps, 2000=20%)"
+                  label="Verified revenue share (bps, 2000=20%)"
                   value={dealForm.profitShareBps}
                   onChange={(v) => setDealForm({ ...dealForm, profitShareBps: v })}
                 />
@@ -219,12 +218,12 @@ export function BusinessDashboard({ wallet, onOpenDeal }) {
                   onChange={(v) => setDealForm({ ...dealForm, repaymentDays: v })}
                 />
                 <Field
-                  label="Number of repayments"
+                  label="Number of reporting periods"
                   value={dealForm.numRepayments}
                   onChange={(v) => setDealForm({ ...dealForm, numRepayments: v })}
                 />
                 <Field
-                  label="Repayment cap (0 = uncapped)"
+                  label="Investor distribution cap (0 = uncapped)"
                   value={dealForm.repaymentCap}
                   onChange={(v) => setDealForm({ ...dealForm, repaymentCap: v })}
                 />

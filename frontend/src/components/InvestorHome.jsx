@@ -31,9 +31,13 @@ export function InvestorHome({ wallet, onOpenDeal }) {
   const needsAction = portfolio?.deals?.filter((d) => d.needs_my_approval) || [];
 
   return (
-    <div className="mx-auto max-w-5xl px-5 py-10">
-      <h1 className="font-display text-3xl font-semibold tracking-tight">Investor</h1>
-      <p className="mt-1 text-ink-soft">Fund verified businesses, track what's owed to you.</p>
+    <div className="page-shell py-10">
+      <section className="investor-hero">
+        <div className="page-kicker light">Controlled capital marketplace</div>
+        <h1 className="mt-3">Back growth.<br/>Limit blind trust.</h1>
+        <p>Fund verified African businesses through USDC escrow. Capital leaves in approved tranches and distributions are calculated from verifier-attested collections.</p>
+        <div className="hero-chips"><span>10% minimum first-loss bond</span><span>3-investor activation</span><span>Accountable supplier references</span><span>Arc settlement</span></div>
+      </section>
 
       {!wallet.address && (
         <div className="mt-6 rounded-xl border border-dashed border-ink/15 bg-white px-5 py-4 text-sm text-ink-soft">

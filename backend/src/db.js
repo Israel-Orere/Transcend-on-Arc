@@ -47,6 +47,7 @@ db.exec(`
     city TEXT,
     country TEXT,
     verified INTEGER DEFAULT 0,
+    supplier_verified INTEGER DEFAULT 0,
     frozen INTEGER DEFAULT 0,
     completed_deals INTEGER DEFAULT 0,
     defaulted_deals INTEGER DEFAULT 0,
@@ -64,6 +65,31 @@ db.exec(`
     attestations_given INTEGER DEFAULT 0,
     attestations_linked_to_default INTEGER DEFAULT 0,
     updated_at INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS supplier_reputations (
+    address TEXT PRIMARY KEY,
+    endorsements_given INTEGER DEFAULT 0,
+    endorsements_linked_to_default INTEGER DEFAULT 0,
+    endorsements_revoked INTEGER DEFAULT 0,
+    current_weight INTEGER DEFAULT 0,
+    updated_at INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS supplier_endorsements (
+    merchant_address TEXT,
+    supplier_address TEXT,
+    relationship_hash TEXT,
+    evidence_hash TEXT,
+    relationship_months INTEGER,
+    rating INTEGER,
+    issued_at INTEGER,
+    expires_at INTEGER,
+    related_party INTEGER DEFAULT 0,
+    revoked INTEGER DEFAULT 0,
+    weight_at_issue INTEGER DEFAULT 0,
+    updated_at INTEGER,
+    PRIMARY KEY (merchant_address, supplier_address)
   );
 
   CREATE TABLE IF NOT EXISTS deals (
@@ -114,6 +140,20 @@ db.exec(`
     PRIMARY KEY (deal_id, investor_address, tx_hash)
   );
 
+  CREATE TABLE IF NOT EXISTS revenue_reports (
+    deal_id INTEGER,
+    period INTEGER,
+    gross_revenue_usdc TEXT,
+    amount_due_usdc TEXT,
+    evidence_hash TEXT,
+    verifier TEXT,
+    submitted_at INTEGER,
+    attested INTEGER DEFAULT 0,
+    settled INTEGER DEFAULT 0,
+    updated_at INTEGER,
+    PRIMARY KEY (deal_id, period)
+  );
+
   CREATE TABLE IF NOT EXISTS profiles (
     business_address TEXT PRIMARY KEY,
     pitch TEXT,
@@ -129,5 +169,13 @@ db.exec(`
 
   INSERT OR IGNORE INTO indexer_state (id, last_block) VALUES (1, 0);
 `);
+
+// Lightweight forward migration for databases created before supplier
+// credentials were separated from ordinary business verification.
+try {
+  rawDb.exec("ALTER TABLE businesses ADD COLUMN supplier_verified INTEGER DEFAULT 0");
+} catch (err) {
+  if (!String(err.message).includes("duplicate column name")) throw err;
+}
 
 module.exports = db;

@@ -17,6 +17,10 @@ pragma solidity ^0.8.24;
 ///     only ever be bound to one wallet address, so a business that defaults
 ///     cannot simply re-register under a new address and start over.
 contract BusinessRegistry {
+    uint256 public constant MAX_ENDORSEMENTS_PER_MERCHANT = 8;
+    uint256 public constant MIN_ENDORSEMENT_MONTHS = 3;
+    uint256 public constant MAX_ENDORSEMENT_LIFETIME = 365 days;
+
     enum ReputationTier {
         Unverified, // registered but not yet KYC/document-verified -- cannot raise
         New, // verified, no completed deals yet -- smallest raise cap
@@ -47,6 +51,7 @@ contract BusinessRegistry {
     mapping(address => bool) public authorizedPools;
 
     mapping(address => Business) public businesses;
+    mapping(address => bool) public verifiedSuppliers;
     address[] public businessList;
     mapping(bytes32 => address) public regNumberToAddress; // Sybil-resistance
 
@@ -64,12 +69,59 @@ contract BusinessRegistry {
 
     mapping(address => Verifier) public verifiers;
 
+    /// @notice A supplier endorsement is an accountable commercial reference,
+    /// not a social-media upvote. The supplier must itself be verified, must
+    /// commit a hash of off-chain relationship evidence, must disclose related
+    /// ownership, and inherits a public default link if the merchant later
+    /// defaults. Endorsements expire and are capped per merchant so a merchant
+    /// cannot manufacture an unbounded wall of friendly votes.
+    struct SupplierEndorsement {
+        address supplier;
+        address merchant;
+        bytes32 relationshipHash;
+        bytes32 evidenceHash;
+        uint32 relationshipMonths;
+        uint8 rating; // 1-5, retained for transparency; trust weight is protocol-calculated
+        uint64 issuedAt;
+        uint64 expiresAt;
+        bool relatedParty;
+        bool revoked;
+        uint32 weightAtIssue;
+    }
+
+    struct SupplierReputation {
+        uint256 endorsementsGiven;
+        uint256 endorsementsLinkedToDefault;
+        uint256 endorsementsRevoked;
+    }
+
+    mapping(address => SupplierReputation) public supplierReputations;
+    mapping(address => SupplierEndorsement[]) private merchantEndorsements;
+    mapping(address => mapping(address => uint256)) private endorsementIndexPlusOne;
+    mapping(bytes32 => bool) public endorsementEvidenceUsed;
+
     event VerifierAdded(address indexed verifier, string name);
     event VerifierRemoved(address indexed verifier);
     event VerifierAttestationRecorded(address indexed verifier);
     event VerifierDefaultLinked(address indexed verifier);
+    event SupplierEndorsed(
+        address indexed supplier,
+        address indexed merchant,
+        bytes32 indexed evidenceHash,
+        uint32 weight,
+        bool relatedParty,
+        uint64 expiresAt
+    );
+    event SupplierEndorsementRevoked(address indexed supplier, address indexed merchant);
+    event SupplierEndorsementDefaultLinked(address indexed supplier, address indexed merchant);
+    event SupplierStatusChanged(address indexed supplier, bool verified);
 
     error NotActiveVerifier();
+    error InvalidEndorsement();
+    error TooManyEndorsements();
+    error EndorsementEvidenceReused();
+    error NotEndorsementOwner();
+    error NotVerifiedSupplier();
 
     // Raise caps in USDC (6 decimals) by reputation tier. Admin-tunable so caps
     // can be calibrated as real default-rate data comes in.
@@ -142,12 +194,141 @@ contract BusinessRegistry {
         emit VerifierRemoved(verifier);
     }
 
+    /// @notice Supplier status is a separate due-diligence credential. A
+    /// verified merchant cannot automatically participate in an endorsement
+    /// ring by calling itself a supplier.
+    function setSupplierStatus(address supplier, bool verified) external onlyAdmin {
+        Business storage b = businesses[supplier];
+        if (!b.registered || (verified && !b.verified)) revert NotRegistered();
+        verifiedSuppliers[supplier] = verified;
+        emit SupplierStatusChanged(supplier, verified);
+    }
+
+    function isVerifiedSupplier(address supplier) external view returns (bool) {
+        Business storage b = businesses[supplier];
+        return verifiedSuppliers[supplier] && b.verified && !b.frozen;
+    }
+
     function isActiveVerifier(address verifier) external view returns (bool) {
         return verifiers[verifier].active;
     }
 
     function getVerifier(address verifier) external view returns (Verifier memory) {
         return verifiers[verifier];
+    }
+
+    // ---------- Accountable supplier endorsements ----------
+
+    /// @notice Current protocol-calculated weight of a supplier reference.
+    /// Defaults and bad references reduce influence; a related-party reference
+    /// is always displayed but contributes zero to the merchant's trust signal.
+    function supplierReputationWeight(address supplier) public view returns (uint32) {
+        Business storage b = businesses[supplier];
+        if (!verifiedSuppliers[supplier] || !b.registered || !b.verified || b.frozen) return 0;
+
+        SupplierReputation storage s = supplierReputations[supplier];
+        uint256 weight = 100;
+        weight += b.completedDeals > 3 ? 75 : b.completedDeals * 25;
+
+        // Defaults reduce influence; revoking a reference does not. Penalising
+        // revocation would create the wrong incentive when a supplier spots a
+        // concern and responsibly withdraws its support.
+        uint256 penalty = b.defaultedDeals * 60 + s.endorsementsLinkedToDefault * 30;
+        if (penalty >= weight) return 10;
+        return uint32(weight - penalty);
+    }
+
+    /// @notice Create or refresh a commercial reference for a merchant.
+    /// `relationshipHash` can commit to supplier account IDs / invoice-series
+    /// metadata; `evidenceHash` commits to the actual reviewed evidence. Raw
+    /// invoices and identities stay encrypted off-chain.
+    function endorseMerchant(
+        address merchant,
+        bytes32 relationshipHash,
+        bytes32 evidenceHash,
+        uint32 relationshipMonths,
+        uint8 rating,
+        uint64 expiresAt,
+        bool relatedParty
+    ) external {
+        if (!verifiedSuppliers[msg.sender]) revert NotVerifiedSupplier();
+        Business storage supplier = businesses[msg.sender];
+        Business storage target = businesses[merchant];
+        if (
+            msg.sender == merchant || !supplier.registered || !supplier.verified || supplier.frozen ||
+            !target.registered || !target.verified || target.frozen || relationshipHash == bytes32(0) ||
+            evidenceHash == bytes32(0) || relationshipMonths < MIN_ENDORSEMENT_MONTHS || rating == 0 || rating > 5 ||
+            expiresAt <= block.timestamp || expiresAt > block.timestamp + MAX_ENDORSEMENT_LIFETIME
+        ) revert InvalidEndorsement();
+        if (endorsementEvidenceUsed[evidenceHash]) revert EndorsementEvidenceReused();
+
+        uint32 weight = relatedParty ? 0 : supplierReputationWeight(msg.sender);
+        uint256 existing = endorsementIndexPlusOne[merchant][msg.sender];
+        if (existing == 0) {
+            if (merchantEndorsements[merchant].length >= MAX_ENDORSEMENTS_PER_MERCHANT) {
+                revert TooManyEndorsements();
+            }
+            merchantEndorsements[merchant].push(
+                SupplierEndorsement({
+                    supplier: msg.sender,
+                    merchant: merchant,
+                    relationshipHash: relationshipHash,
+                    evidenceHash: evidenceHash,
+                    relationshipMonths: relationshipMonths,
+                    rating: rating,
+                    issuedAt: uint64(block.timestamp),
+                    expiresAt: expiresAt,
+                    relatedParty: relatedParty,
+                    revoked: false,
+                    weightAtIssue: weight
+                })
+            );
+            endorsementIndexPlusOne[merchant][msg.sender] = merchantEndorsements[merchant].length;
+        } else {
+            SupplierEndorsement storage endorsement = merchantEndorsements[merchant][existing - 1];
+            endorsement.relationshipHash = relationshipHash;
+            endorsement.evidenceHash = evidenceHash;
+            endorsement.relationshipMonths = relationshipMonths;
+            endorsement.rating = rating;
+            endorsement.issuedAt = uint64(block.timestamp);
+            endorsement.expiresAt = expiresAt;
+            endorsement.relatedParty = relatedParty;
+            endorsement.revoked = false;
+            endorsement.weightAtIssue = weight;
+        }
+
+        endorsementEvidenceUsed[evidenceHash] = true;
+        supplierReputations[msg.sender].endorsementsGiven += 1;
+        emit SupplierEndorsed(msg.sender, merchant, evidenceHash, weight, relatedParty, expiresAt);
+    }
+
+    function revokeSupplierEndorsement(address merchant) external {
+        uint256 indexPlusOne = endorsementIndexPlusOne[merchant][msg.sender];
+        if (indexPlusOne == 0) revert NotEndorsementOwner();
+        SupplierEndorsement storage endorsement = merchantEndorsements[merchant][indexPlusOne - 1];
+        if (endorsement.revoked) revert InvalidEndorsement();
+        endorsement.revoked = true;
+        supplierReputations[msg.sender].endorsementsRevoked += 1;
+        emit SupplierEndorsementRevoked(msg.sender, merchant);
+    }
+
+    function getSupplierReputation(address supplier) external view returns (SupplierReputation memory) {
+        return supplierReputations[supplier];
+    }
+
+    function getSupplierEndorsements(address merchant) external view returns (SupplierEndorsement[] memory) {
+        return merchantEndorsements[merchant];
+    }
+
+    function merchantEndorsementScore(address merchant) external view returns (uint256 score, uint256 activeCount) {
+        SupplierEndorsement[] storage endorsements = merchantEndorsements[merchant];
+        for (uint256 i = 0; i < endorsements.length; i++) {
+            SupplierEndorsement storage endorsement = endorsements[i];
+            if (!endorsement.revoked && !endorsement.relatedParty && endorsement.expiresAt >= block.timestamp) {
+                score += supplierReputationWeight(endorsement.supplier);
+                activeCount += 1;
+            }
+        }
     }
 
     /// @notice Called by an authorized InvestmentPool each time a verifier
@@ -250,6 +431,19 @@ contract BusinessRegistry {
         Business storage b = businesses[business];
         b.defaultedDeals += 1;
         b.frozen = true;
+
+        // Endorsers placed their own public reputation behind this merchant.
+        // The bounded list keeps this loop safe while ensuring references have
+        // consequences. Related-party references are disclosed but carried no
+        // trust weight, so they do not receive an additional default penalty.
+        SupplierEndorsement[] storage endorsements = merchantEndorsements[business];
+        for (uint256 i = 0; i < endorsements.length; i++) {
+            SupplierEndorsement storage endorsement = endorsements[i];
+            if (!endorsement.revoked && !endorsement.relatedParty && endorsement.expiresAt >= block.timestamp) {
+                supplierReputations[endorsement.supplier].endorsementsLinkedToDefault += 1;
+                emit SupplierEndorsementDefaultLinked(endorsement.supplier, business);
+            }
+        }
         emit DealDefaultedRecorded(business);
         emit BusinessFrozen(business);
     }

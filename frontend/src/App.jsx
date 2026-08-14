@@ -5,6 +5,8 @@ import { InvestorHome } from "./components/InvestorHome";
 import { DealDetail } from "./components/DealDetail";
 import { BusinessDashboard } from "./components/BusinessDashboard";
 import { VerifierDashboard } from "./components/VerifierDashboard";
+import { SupplierDashboard } from "./components/SupplierDashboard";
+import { ProtectionCenter } from "./components/ProtectionCenter";
 import { useWallet } from "./lib/useWallet";
 
 const ROLE_KEY = "transcend.role";
@@ -18,6 +20,7 @@ export default function App() {
     }
   });
   const [openDealId, setOpenDealId] = useState(null);
+  const [showProtection, setShowProtection] = useState(false);
   const wallet = useWallet();
 
   useEffect(() => {
@@ -32,19 +35,23 @@ export default function App() {
   const chooseRole = (r) => {
     setRole(r);
     setOpenDealId(null);
+    setShowProtection(false);
   };
   const switchRole = () => {
     setRole(null);
     setOpenDealId(null);
+    setShowProtection(false);
   };
-  const goHome = () => setOpenDealId(null);
-  const openDeal = (id) => setOpenDealId(id);
+  const goHome = () => { setOpenDealId(null); setShowProtection(false); };
+  const openDeal = (id) => { setOpenDealId(id); setShowProtection(false); };
 
   return (
     <div className="min-h-screen">
-      <Header role={role} onSwitchRole={switchRole} onGoHome={goHome} wallet={wallet} />
+      <Header role={role} onSwitchRole={switchRole} onGoHome={goHome} onProtection={() => setShowProtection(true)} wallet={wallet} />
 
-      {!role ? (
+      {showProtection ? (
+        <ProtectionCenter onBrowse={() => { setShowProtection(false); if (!role) setRole("investor"); }} />
+      ) : !role ? (
         <RoleSelect onSelect={chooseRole} />
       ) : openDealId ? (
         <DealDetail dealId={openDealId} wallet={wallet} onBack={() => setOpenDealId(null)} />
@@ -52,12 +59,14 @@ export default function App() {
         <InvestorHome wallet={wallet} onOpenDeal={openDeal} />
       ) : role === "business" ? (
         <BusinessDashboard wallet={wallet} onOpenDeal={openDeal} />
+      ) : role === "supplier" ? (
+        <SupplierDashboard wallet={wallet} onOpenDeal={openDeal} />
       ) : (
         <VerifierDashboard wallet={wallet} onOpenDeal={openDeal} />
       )}
 
       <footer className="mx-auto max-w-5xl px-5 py-10 text-center text-xs text-ink-soft">
-        Built on Arc · Milestone escrow, independent verification, and collateral — not a promise, a mechanism.
+        Built on Arc · USDC escrow, accountable attestations and verified-revenue distributions · Testnet prototype
       </footer>
     </div>
   );

@@ -9,23 +9,31 @@ const MAX_BLOCK_RANGE = 2000n; // chunk large backfills to stay under RPC log-ra
 // ---------- Upsert helpers (refetch full struct from chain, don't trust event args alone) ----------
 
 async function upsertBusiness(address) {
-  const b = await publicClient.readContract({
-    address: REGISTRY_ADDRESS,
-    abi: BusinessRegistryABI,
-    functionName: "getBusiness",
-    args: [address],
-  });
+  const [b, supplierVerified] = await Promise.all([
+    publicClient.readContract({
+      address: REGISTRY_ADDRESS,
+      abi: BusinessRegistryABI,
+      functionName: "getBusiness",
+      args: [address],
+    }),
+    publicClient.readContract({
+      address: REGISTRY_ADDRESS,
+      abi: BusinessRegistryABI,
+      functionName: "isVerifiedSupplier",
+      args: [address],
+    }),
+  ]);
   if (!b.registered) return;
   db.prepare(
-    `INSERT INTO businesses (address, business_name, category, city, country, verified, frozen,
+    `INSERT INTO businesses (address, business_name, category, city, country, verified, supplier_verified, frozen,
         completed_deals, defaulted_deals, total_raised_usdc, total_repaid_usdc,
         disbursed_traceable_usdc, disbursed_untraceable_usdc, updated_at)
-     VALUES (@address, @business_name, @category, @city, @country, @verified, @frozen,
+     VALUES (@address, @business_name, @category, @city, @country, @verified, @supplier_verified, @frozen,
         @completed_deals, @defaulted_deals, @total_raised_usdc, @total_repaid_usdc,
         @disbursed_traceable_usdc, @disbursed_untraceable_usdc, @updated_at)
      ON CONFLICT(address) DO UPDATE SET
         business_name=excluded.business_name, category=excluded.category, city=excluded.city,
-        country=excluded.country, verified=excluded.verified, frozen=excluded.frozen,
+        country=excluded.country, verified=excluded.verified, supplier_verified=excluded.supplier_verified, frozen=excluded.frozen,
         completed_deals=excluded.completed_deals, defaulted_deals=excluded.defaulted_deals,
         total_raised_usdc=excluded.total_raised_usdc, total_repaid_usdc=excluded.total_repaid_usdc,
         disbursed_traceable_usdc=excluded.disbursed_traceable_usdc,
@@ -37,6 +45,7 @@ async function upsertBusiness(address) {
     city: b.city,
     country: b.country,
     verified: b.verified ? 1 : 0,
+    supplier_verified: supplierVerified ? 1 : 0,
     frozen: b.frozen ? 1 : 0,
     completed_deals: Number(b.completedDeals),
     defaulted_deals: Number(b.defaultedDeals),
@@ -69,6 +78,77 @@ async function upsertVerifier(address) {
     attestations_linked_to_default: Number(v.attestationsLinkedToDefault),
     updated_at: Date.now(),
   });
+}
+
+async function upsertSupplierReputation(address) {
+  const [s, weight] = await Promise.all([
+    publicClient.readContract({
+      address: REGISTRY_ADDRESS,
+      abi: BusinessRegistryABI,
+      functionName: "getSupplierReputation",
+      args: [address],
+    }),
+    publicClient.readContract({
+      address: REGISTRY_ADDRESS,
+      abi: BusinessRegistryABI,
+      functionName: "supplierReputationWeight",
+      args: [address],
+    }),
+  ]);
+  db.prepare(
+    `INSERT INTO supplier_reputations (address, endorsements_given, endorsements_linked_to_default,
+        endorsements_revoked, current_weight, updated_at)
+     VALUES (@address, @endorsements_given, @endorsements_linked_to_default,
+        @endorsements_revoked, @current_weight, @updated_at)
+     ON CONFLICT(address) DO UPDATE SET endorsements_given=excluded.endorsements_given,
+        endorsements_linked_to_default=excluded.endorsements_linked_to_default,
+        endorsements_revoked=excluded.endorsements_revoked, current_weight=excluded.current_weight,
+        updated_at=excluded.updated_at`
+  ).run({
+    address: address.toLowerCase(),
+    endorsements_given: Number(s.endorsementsGiven),
+    endorsements_linked_to_default: Number(s.endorsementsLinkedToDefault),
+    endorsements_revoked: Number(s.endorsementsRevoked),
+    current_weight: Number(weight),
+    updated_at: Date.now(),
+  });
+}
+
+async function upsertSupplierEndorsements(merchant) {
+  const endorsements = await publicClient.readContract({
+    address: REGISTRY_ADDRESS,
+    abi: BusinessRegistryABI,
+    functionName: "getSupplierEndorsements",
+    args: [merchant],
+  });
+  const stmt = db.prepare(
+    `INSERT INTO supplier_endorsements (merchant_address, supplier_address, relationship_hash, evidence_hash,
+        relationship_months, rating, issued_at, expires_at, related_party, revoked, weight_at_issue, updated_at)
+     VALUES (@merchant_address, @supplier_address, @relationship_hash, @evidence_hash,
+        @relationship_months, @rating, @issued_at, @expires_at, @related_party, @revoked, @weight_at_issue, @updated_at)
+     ON CONFLICT(merchant_address, supplier_address) DO UPDATE SET relationship_hash=excluded.relationship_hash,
+        evidence_hash=excluded.evidence_hash, relationship_months=excluded.relationship_months,
+        rating=excluded.rating, issued_at=excluded.issued_at, expires_at=excluded.expires_at,
+        related_party=excluded.related_party, revoked=excluded.revoked,
+        weight_at_issue=excluded.weight_at_issue, updated_at=excluded.updated_at`
+  );
+  for (const e of endorsements) {
+    stmt.run({
+      merchant_address: merchant.toLowerCase(),
+      supplier_address: e.supplier.toLowerCase(),
+      relationship_hash: e.relationshipHash,
+      evidence_hash: e.evidenceHash,
+      relationship_months: Number(e.relationshipMonths),
+      rating: Number(e.rating),
+      issued_at: Number(e.issuedAt),
+      expires_at: Number(e.expiresAt),
+      related_party: e.relatedParty ? 1 : 0,
+      revoked: e.revoked ? 1 : 0,
+      weight_at_issue: Number(e.weightAtIssue),
+      updated_at: Date.now(),
+    });
+    await upsertSupplierReputation(e.supplier);
+  }
 }
 
 async function upsertDeal(dealId, txHash) {
@@ -112,7 +192,42 @@ async function upsertDeal(dealId, txHash) {
   });
 
   await upsertMilestones(dealId);
+  await upsertRevenueReports(dealId, Number(d.repaymentsMade) + 1);
   await upsertBusiness(d.business);
+}
+
+async function upsertRevenueReports(dealId, throughPeriod) {
+  const stmt = db.prepare(
+    `INSERT INTO revenue_reports (deal_id, period, gross_revenue_usdc, amount_due_usdc, evidence_hash,
+        verifier, submitted_at, attested, settled, updated_at)
+     VALUES (@deal_id, @period, @gross_revenue_usdc, @amount_due_usdc, @evidence_hash,
+        @verifier, @submitted_at, @attested, @settled, @updated_at)
+     ON CONFLICT(deal_id, period) DO UPDATE SET gross_revenue_usdc=excluded.gross_revenue_usdc,
+        amount_due_usdc=excluded.amount_due_usdc, evidence_hash=excluded.evidence_hash,
+        verifier=excluded.verifier, submitted_at=excluded.submitted_at, attested=excluded.attested,
+        settled=excluded.settled, updated_at=excluded.updated_at`
+  );
+  for (let period = 1; period <= throughPeriod; period++) {
+    const report = await publicClient.readContract({
+      address: POOL_ADDRESS,
+      abi: InvestmentPoolABI,
+      functionName: "getRevenueReport",
+      args: [dealId, period],
+    });
+    if (Number(report.submittedAt) === 0) continue;
+    stmt.run({
+      deal_id: Number(dealId),
+      period,
+      gross_revenue_usdc: report.grossRevenueUSDC.toString(),
+      amount_due_usdc: report.amountDueUSDC.toString(),
+      evidence_hash: report.evidenceHash,
+      verifier: report.verifier.toLowerCase(),
+      submitted_at: Number(report.submittedAt),
+      attested: report.attested ? 1 : 0,
+      settled: report.settled ? 1 : 0,
+      updated_at: Date.now(),
+    });
+  }
 }
 
 async function upsertMilestones(dealId) {
@@ -168,6 +283,8 @@ async function processRegistryLogs(fromBlock, toBlock) {
   const { decodeEventLog } = require("viem");
   const touchedBusinesses = new Set();
   const touchedVerifiers = new Set();
+  const touchedMerchants = new Set();
+  const touchedSuppliers = new Set();
 
   for (const log of logs) {
     let decoded;
@@ -193,6 +310,16 @@ async function processRegistryLogs(fromBlock, toBlock) {
       case "VerifierDefaultLinked":
         touchedVerifiers.add(decoded.args.verifier);
         break;
+      case "SupplierEndorsed":
+      case "SupplierEndorsementRevoked":
+      case "SupplierEndorsementDefaultLinked":
+        touchedMerchants.add(decoded.args.merchant);
+        touchedSuppliers.add(decoded.args.supplier);
+        break;
+      case "SupplierStatusChanged":
+        touchedBusinesses.add(decoded.args.supplier);
+        touchedSuppliers.add(decoded.args.supplier);
+        break;
       default:
         break;
     }
@@ -200,6 +327,8 @@ async function processRegistryLogs(fromBlock, toBlock) {
 
   for (const addr of touchedBusinesses) await upsertBusiness(addr);
   for (const addr of touchedVerifiers) await upsertVerifier(addr);
+  for (const addr of touchedMerchants) await upsertSupplierEndorsements(addr);
+  for (const addr of touchedSuppliers) await upsertSupplierReputation(addr);
 }
 
 async function processPoolLogs(fromBlock, toBlock) {
@@ -258,4 +387,12 @@ function startIndexer() {
   tick();
 }
 
-module.exports = { startIndexer, pollOnce, upsertBusiness, upsertDeal, upsertVerifier };
+module.exports = {
+  startIndexer,
+  pollOnce,
+  upsertBusiness,
+  upsertDeal,
+  upsertVerifier,
+  upsertSupplierReputation,
+  upsertSupplierEndorsements,
+};
