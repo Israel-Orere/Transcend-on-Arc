@@ -4,22 +4,22 @@ const ROLE_LABELS = {
   investor: "Investor",
   business: "Business",
   verifier: "Verifier",
+  supplier: "Supplier",
 };
 
-export function Header({ role, onSwitchRole, onGoHome, wallet }) {
+export function Header({ role, onSwitchRole, onGoHome, onProtection, wallet }) {
   const { address, connecting, connect, disconnect, error } = wallet;
 
   return (
-    <header className="sticky top-0 z-10 border-b border-ink/10 bg-paper/90 backdrop-blur">
-      <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-5 py-4">
+    <header className="sticky top-0 z-20 border-b border-ink/10 bg-paper/92 backdrop-blur-xl">
+      <div className="page-shell flex h-[72px] items-center justify-between gap-4">
         <button onClick={onGoHome} className="flex items-center gap-2 text-left">
-          <span className="stamp h-9 w-9 text-[9px] font-bold" style={{ color: "var(--color-ink)" }}>
-            T
-          </span>
-          <span className="font-display text-xl font-semibold tracking-tight">Transcend</span>
+          <span className="brand-glyph">T</span>
+          <span className="font-display text-xl font-semibold tracking-tight">transcend</span>
         </button>
 
         <div className="flex items-center gap-2">
+          <button onClick={onProtection} className="hidden text-sm font-medium text-ink-soft hover:text-ink md:block">How investors are protected</button>
           {role && (
             <button
               onClick={onSwitchRole}

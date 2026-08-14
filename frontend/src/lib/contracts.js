@@ -78,6 +78,25 @@ export const registryActions = {
       functionName: "registerBusiness",
       args: [name, category, city, country, regNumberHash],
     }),
+  endorseMerchant: (
+    walletClient,
+    publicClient,
+    registryAddr,
+    { merchant, relationshipHash, evidenceHash, relationshipMonths, rating, expiresAt, relatedParty }
+  ) =>
+    send(walletClient, publicClient, {
+      address: registryAddr,
+      abi: BusinessRegistryABI,
+      functionName: "endorseMerchant",
+      args: [merchant, relationshipHash, evidenceHash, relationshipMonths, rating, expiresAt, relatedParty],
+    }),
+  revokeSupplierEndorsement: (walletClient, publicClient, registryAddr, merchant) =>
+    send(walletClient, publicClient, {
+      address: registryAddr,
+      abi: BusinessRegistryABI,
+      functionName: "revokeSupplierEndorsement",
+      args: [merchant],
+    }),
 };
 
 export const poolActions = {
@@ -175,19 +194,35 @@ export const poolActions = {
       args: [dealId],
     }),
 
-  remitProfit: async (walletClient, publicClient, poolAddr, usdcAddr, dealId, amount) => {
+  submitRevenueReport: (walletClient, publicClient, poolAddr, dealId, grossRevenue, evidenceHash) =>
+    send(walletClient, publicClient, {
+      address: poolAddr,
+      abi: InvestmentPoolABI,
+      functionName: "submitRevenueReport",
+      args: [dealId, grossRevenue, evidenceHash],
+    }),
+
+  attestRevenueReport: (walletClient, publicClient, poolAddr, dealId) =>
+    send(walletClient, publicClient, {
+      address: poolAddr,
+      abi: InvestmentPoolABI,
+      functionName: "attestRevenueReport",
+      args: [dealId],
+    }),
+
+  settleRevenueShare: async (walletClient, publicClient, poolAddr, usdcAddr, dealId, amountDue) => {
     const account = walletClient.account?.address || (await walletClient.getAddresses())[0];
     await ensureUsdcApproval(walletClient, publicClient, {
       usdc: usdcAddr,
       spender: poolAddr,
       owner: account,
-      amount,
+      amount: amountDue,
     });
     return send(walletClient, publicClient, {
       address: poolAddr,
       abi: InvestmentPoolABI,
-      functionName: "remitProfit",
-      args: [dealId, amount],
+      functionName: "settleRevenueShare",
+      args: [dealId],
     });
   },
 

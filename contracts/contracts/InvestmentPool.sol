@@ -33,6 +33,8 @@ contract InvestmentPool is ReentrancyGuard {
     address public admin;
 
     uint16 public constant BPS_DENOMINATOR = 10_000;
+    uint16 public constant MIN_COLLATERAL_BPS = 1_000;
+    uint16 public constant MAX_COLLATERAL_BPS = 5_000;
     uint256 public constant MAX_MILESTONES = 10;
 
     /// @notice Approval threshold, in bps of raised weight, required to
@@ -116,6 +118,24 @@ contract InvestmentPool is ReentrancyGuard {
         bool paused; // admin emergency brake: blocks milestone-lifecycle progression while true
     }
 
+    /// @notice A merchant cannot choose an arbitrary repayment amount. For
+    /// each reporting period it commits the observed gross collections and
+    /// evidence hash; an independent verifier attests that off-chain data;
+    /// then the contract computes the revenue share from `profitShareBps`.
+    /// The legacy field name is retained for storage/API compatibility, but
+    /// it represents a capped share of verified collections, not accounting
+    /// profit declared by the merchant.
+    struct RevenueReport {
+        uint16 period;
+        uint256 grossRevenueUSDC;
+        uint256 amountDueUSDC;
+        bytes32 evidenceHash;
+        address verifier;
+        uint64 submittedAt;
+        bool attested;
+        bool settled;
+    }
+
     uint256 private _nextDealId = 1;
 
     mapping(uint256 => Deal) public deals;
@@ -124,6 +144,7 @@ contract InvestmentPool is ReentrancyGuard {
     mapping(uint256 => mapping(address => uint256)) public investorDebt; // for pull-based distribution accounting
     mapping(uint256 => mapping(address => bool)) public hasApprovedMilestone; // per (dealId*1000+milestoneIdx) style key avoided; see approvals mapping below
     mapping(uint256 => address[]) public dealInvestorList;
+    mapping(uint256 => mapping(uint16 => RevenueReport)) public revenueReports;
 
     // approvals[dealId][milestoneIndex][investor] = approved?
     mapping(uint256 => mapping(uint256 => mapping(address => bool))) public milestoneApprovals;
@@ -140,7 +161,15 @@ contract InvestmentPool is ReentrancyGuard {
     event MilestoneApproved(uint256 indexed dealId, uint256 indexed milestoneIndex, address indexed investor, uint256 approvalWeight);
     event MilestoneReleased(uint256 indexed dealId, uint256 indexed milestoneIndex, uint256 amount);
     event DealActivated(uint256 indexed dealId);
-    event ProfitRemitted(uint256 indexed dealId, uint256 amount, uint16 repaymentsMade);
+    event RevenueReportSubmitted(
+        uint256 indexed dealId,
+        uint16 indexed period,
+        uint256 grossRevenueUSDC,
+        uint256 amountDueUSDC,
+        bytes32 evidenceHash
+    );
+    event RevenueReportAttested(uint256 indexed dealId, uint16 indexed period, address indexed verifier);
+    event RevenueShareSettled(uint256 indexed dealId, uint16 indexed period, uint256 amount, uint16 repaymentsMade);
     event DealCompleted(uint256 indexed dealId);
     event DealDefaulted(uint256 indexed dealId, uint256 forfeitedCollateral, uint256 undisbursedEscrow);
     event DealCancelled(uint256 indexed dealId);
@@ -173,6 +202,10 @@ contract InvestmentPool is ReentrancyGuard {
     error NotAssignedVerifier();
     error DealIsPaused();
     error SecondVerifierMustDiffer();
+    error RevenueReportMissing();
+    error RevenueReportAlreadyExists();
+    error RevenueReportNotAttested();
+    error RevenueReportAlreadySettled();
 
     modifier onlyAdmin() {
         if (msg.sender != admin) revert NotAdmin();
@@ -243,7 +276,11 @@ contract InvestmentPool is ReentrancyGuard {
         uint256 repaymentCapUSDC
     ) external nonReentrant returns (uint256 dealId) {
         if (!registry.canRaise(msg.sender)) revert CannotRaise();
-        if (targetAmount == 0 || profitShareBps == 0 || profitShareBps > BPS_DENOMINATOR) revert InvalidMilestones();
+        if (
+            targetAmount == 0 || collateralBps < MIN_COLLATERAL_BPS || collateralBps > MAX_COLLATERAL_BPS
+                || profitShareBps == 0 || profitShareBps > BPS_DENOMINATOR || repaymentIntervalSeconds == 0
+                || numRepayments == 0
+        ) revert InvalidMilestones();
         if (targetAmount > registry.raiseCap(msg.sender)) revert ExceedsRaiseCap();
         if (
             milestoneDescriptions.length == 0 ||
@@ -293,12 +330,8 @@ contract InvestmentPool is ReentrancyGuard {
             );
         }
 
-        if (collateralAmount > 0) {
-            usdc.safeTransferFrom(msg.sender, address(this), collateralAmount);
-            d.collateralPosted = true;
-        } else {
-            d.collateralPosted = true; // no collateral required
-        }
+        usdc.safeTransferFrom(msg.sender, address(this), collateralAmount);
+        d.collateralPosted = true;
 
         emit DealCreated(dealId, msg.sender, targetAmount, collateralAmount);
     }
@@ -485,16 +518,79 @@ contract InvestmentPool is ReentrancyGuard {
         }
     }
 
-    // ---------- Repayment / profit-share ----------
+    // ---------- Verified revenue reporting / investor distribution ----------
 
-    /// @notice Business remits a scheduled profit-share payment. Distributed
-    /// pro-rata to investors via a pull-accounting index; investors withdraw
-    /// with `withdraw`.
-    function remitProfit(uint256 dealId, uint256 amount) external nonReentrant {
+    function submitRevenueReport(uint256 dealId, uint256 grossRevenueUSDC, bytes32 evidenceHash) external {
         Deal storage d = _getDeal(dealId);
         if (msg.sender != d.business) revert NotBusinessOwner();
         if (d.status != DealStatus.Repaying) revert WrongStatus();
-        if (amount == 0) revert ZeroAmount();
+        if (d.paused) revert DealIsPaused();
+        if (grossRevenueUSDC == 0) revert ZeroAmount();
+        if (evidenceHash == bytes32(0) || evidenceHashUsed[evidenceHash]) revert EvidenceHashReused();
+
+        uint16 period = d.repaymentsMade + 1;
+        RevenueReport storage report = revenueReports[dealId][period];
+        if (report.submittedAt != 0) revert RevenueReportAlreadyExists();
+
+        uint256 amountDue = (grossRevenueUSDC * d.profitShareBps) / BPS_DENOMINATOR;
+        if (d.repaymentCapUSDC > 0) {
+            uint256 remaining = d.repaymentCapUSDC > d.totalRemittedUSDC
+                ? d.repaymentCapUSDC - d.totalRemittedUSDC
+                : 0;
+            if (amountDue > remaining) amountDue = remaining;
+        }
+        if (amountDue == 0) revert ZeroAmount();
+
+        evidenceHashUsed[evidenceHash] = true;
+        revenueReports[dealId][period] = RevenueReport({
+            period: period,
+            grossRevenueUSDC: grossRevenueUSDC,
+            amountDueUSDC: amountDue,
+            evidenceHash: evidenceHash,
+            verifier: address(0),
+            submittedAt: uint64(block.timestamp),
+            attested: false,
+            settled: false
+        });
+
+        emit RevenueReportSubmitted(dealId, period, grossRevenueUSDC, amountDue, evidenceHash);
+    }
+
+    function attestRevenueReport(uint256 dealId) external {
+        if (!registry.isActiveVerifier(msg.sender)) revert NotActiveVerifier();
+        Deal storage d = _getDeal(dealId);
+        if (d.status != DealStatus.Repaying) revert WrongStatus();
+        if (d.paused) revert DealIsPaused();
+        if (d.assignedVerifier != address(0) && msg.sender != d.assignedVerifier) revert NotAssignedVerifier();
+
+        uint16 period = d.repaymentsMade + 1;
+        RevenueReport storage report = revenueReports[dealId][period];
+        if (report.submittedAt == 0) revert RevenueReportMissing();
+        if (report.attested) revert AlreadyApproved();
+
+        report.attested = true;
+        report.verifier = msg.sender;
+        registry.recordVerifierAttestation(msg.sender);
+        emit RevenueReportAttested(dealId, period, msg.sender);
+    }
+
+    /// @notice Transfers the exact contract-calculated share of independently
+    /// attested gross collections. The merchant cannot lower the payment after
+    /// the report is accepted. Investors receive funds through pull accounting.
+    function settleRevenueShare(uint256 dealId) external nonReentrant {
+        Deal storage d = _getDeal(dealId);
+        if (msg.sender != d.business) revert NotBusinessOwner();
+        if (d.status != DealStatus.Repaying) revert WrongStatus();
+        if (d.paused) revert DealIsPaused();
+
+        uint16 period = d.repaymentsMade + 1;
+        RevenueReport storage report = revenueReports[dealId][period];
+        if (report.submittedAt == 0) revert RevenueReportMissing();
+        if (!report.attested) revert RevenueReportNotAttested();
+        if (report.settled) revert RevenueReportAlreadySettled();
+
+        uint256 amount = report.amountDueUSDC;
+        report.settled = true;
 
         usdc.safeTransferFrom(msg.sender, address(this), amount);
 
@@ -504,7 +600,7 @@ contract InvestmentPool is ReentrancyGuard {
         d.nextRepaymentDue = block.timestamp + d.repaymentIntervalSeconds;
 
         registry.recordRepayment(d.business, amount);
-        emit ProfitRemitted(dealId, amount, d.repaymentsMade);
+        emit RevenueShareSettled(dealId, period, amount, d.repaymentsMade);
 
         // Completes on whichever comes first: the repayment schedule
         // finishing, or (if set) hitting the capped total return -- giving
@@ -548,6 +644,10 @@ contract InvestmentPool is ReentrancyGuard {
             if (milestones[i].verifier2 != address(0)) {
                 registry.recordVerifierDefaultLink(milestones[i].verifier2);
             }
+        }
+        RevenueReport storage currentReport = revenueReports[dealId][d.repaymentsMade + 1];
+        if (currentReport.verifier != address(0)) {
+            registry.recordVerifierDefaultLink(currentReport.verifier);
         }
 
         uint256 undisbursed = d.targetAmount - d.releasedAmount; // always 0 once fully released, kept for safety
@@ -613,6 +713,10 @@ contract InvestmentPool is ReentrancyGuard {
 
     function getDealInvestors(uint256 dealId) external view returns (address[] memory) {
         return dealInvestorList[dealId];
+    }
+
+    function getRevenueReport(uint256 dealId, uint16 period) external view returns (RevenueReport memory) {
+        return revenueReports[dealId][period];
     }
 
     function nextDealId() external view returns (uint256) {

@@ -1,12 +1,12 @@
 # Transcend
 
-Verified capital for Nigerian MSMEs, built on [Arc](https://docs.arc.io) — Circle's USDC-native,
+Verified capital for African MSMEs, built on [Arc](https://docs.arc.network) — a USDC-native,
 sub-second-finality L1.
 
 Transcend connects investors to established small businesses on a milestone-gated,
 capped revenue-share basis. Instead of handing a business a lump sum and hoping,
 capital releases in tranches — each one confirmed by an independent verifier, and
-often by the on-chain counterparty actually receiving it — before investors vote to
+often by the on-chain counterparty fulfilling it — before investors vote to
 release it.
 
 This README covers: what's actually built, why it's built this way, what's still a
@@ -53,7 +53,7 @@ a UI convenience layer, not a source of truth.
 
 ---
 
-## The fraud-resistance model
+## The investor-protection model
 
 No on-chain mechanism can cryptographically prove a real-world receipt is genuine —
 this is the same wall every real-world-asset lending protocol hits (Goldfinch,
@@ -87,7 +87,7 @@ Capital never releases as a lump sum.
   structurally the one that stays traceable.
 
 **Layer 4 — Collateral + reputation, with real teeth.**
-- The business posts a USDC bond before any investor money moves; forfeited
+- The business posts a **minimum 10% USDC first-loss bond** before any investor money moves; forfeited
   pro-rata to investors on default.
 - Raise caps grow only with a track record of *completed* deals — reputation
   tiers (Unverified → New → Trusted → Established).
@@ -98,12 +98,28 @@ Capital never releases as a lump sum.
   so investors can see for themselves what fraction of a business's capital has
   historically stayed inside auditable rails.
 
+**Accountable supplier references — not upvotes.** Supplier status is a separate
+admin-granted credential—ordinary verified merchants cannot endorse each other. A supplier must be a verified,
+unfrozen business and commit unique evidence of at least a three-month trading
+relationship. References expire, are capped at eight per merchant and must disclose
+related ownership; a related-party reference stays visible but has zero weight. The
+supplier's score depends on its own completed/defaulted deals and every
+merchant default later linked to its endorsements. This makes collusion attributable
+and costly, but not impossible. Responsible revocation stays auditable but is not
+penalised, so suppliers have an incentive to flag concerns early. The signal never
+replaces independent verification.
+
 **Anti-collusion, investor side.** The business cannot invest in its own raise. No
 single investor can hold more than 40% of a deal — which mathematically forces at
 least 3 genuinely distinct funders before a deal can even activate, raising the cost
 of a self-funding attack from "one wallet" to "a coordinated Sybil ring."
 
-**Capped, not open-ended, returns.** A deal can set a total-repayment ceiling;
+**Verifier-attested collections, not self-declared profit.** For every reporting
+period, the merchant commits gross-collection evidence. An assigned independent
+verifier attests it, then the contract computes the exact investor distribution from
+the agreed basis points. The merchant cannot choose an arbitrary remittance amount.
+
+**Capped, not open-ended, returns.** A deal can set a total-distribution ceiling;
 completion triggers the moment that's hit, independent of the repayment schedule —
 investors know their maximum return upfront (a capped revenue-share structure, not
 an open-ended profit share that's trivially easy to misreport).
@@ -111,7 +127,7 @@ an open-ended profit share that's trivially easy to misreport).
 **Emergency brake.** Admin can pause an in-progress deal's entire milestone pipeline
 instantly on a fraud signal, without waiting for a full missed-payment default.
 
-All of this is exercised in `contracts/test/Transcend.test.js` — 17 tests covering
+All of this is exercised in `contracts/test/Transcend.test.js` — 23 tests covering
 the full lifecycle plus every mechanism above, including the specific attacks each
 one closes (self-funding, evidence-hash reuse, verifier self-selection, bare-majority
 exits to untraceable wallets).
@@ -125,15 +141,16 @@ which is the actual mechanism that pulls suppliers on-chain over time, rather th
 mandating something unrealistic at launch.
 
 **Explicitly out of scope for a smart contract, and not built here:**
-- Live bank/POS/inventory integrations, revenue-diversion detection, related-party
-  graph analysis (shared phones/directors/devices across "independent" counterparties)
+- Live bank/POS/inventory integrations and revenue-diversion detection
+- Full related-party graph analysis (shared directors, devices, bank accounts and
+  beneficial owners). Self-disclosure is enforced today; automated discovery is not.
 - Licensed crowdfunding-intermediary status, custodianship, insurance partnerships
 - Legal enforceability of the off-chain agreement, recovery/dispute process,
   jurisdiction and arbitration terms
 - Investor-side KYC (true Sybil resistance beyond the 40%-share/3-investor rule
   needs this — a real product/compliance decision, not a contract tweak)
-- A verifier bond/slashing mechanism (verifiers currently have reputational, not
-  financial, skin in the game)
+- A verifier or supplier bond/slashing mechanism (both currently have reputational,
+  not financial, skin in the game)
 
 These are real gaps, not oversights, and they need data partners, legal counsel, and
 a regulatory strategy — not more Solidity. A production launch should treat this
@@ -169,7 +186,7 @@ verifier/business/supplier, and seeds one partially-funded demo deal. It writes
 Run the test suite any time with:
 
 ```bash
-npm run test   # compiles then runs all 17 tests
+npm run test   # compiles then runs all 23 tests
 ```
 
 ### 2. Backend — indexer + API
@@ -182,6 +199,8 @@ node index.js
 
 Serves on `:4000`. `GET /config` reports the live chain/contract addresses (this is
 what the frontend calls on load — no env vars needed for local dev).
+
+Run `npm test` for backend syntax validation.
 
 ### 3. Frontend
 
@@ -226,7 +245,7 @@ contracts/
   scripts/deploy.js                Arc Testnet deploy
   scripts/deploy-local.js          local Hardhat node deploy + demo seed
   scripts/compile.js               solc-js compile (bypasses blocked native binary download)
-  test/Transcend.test.js           17 tests, full lifecycle + every attack vector closed
+  test/Transcend.test.js           23 tests, lifecycle + adversarial control cases
 
 backend/
   src/db.js          SQLite schema (the indexed public-ledger cache)

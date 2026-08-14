@@ -40,7 +40,7 @@ export function DealCard({ deal, business, onOpen }) {
 
       <div className="mt-3 flex items-center justify-between text-xs text-ink-soft">
         <span>Deal #{deal.deal_id}</span>
-        <span className="font-mono">{deal.profit_share_bps / 100}% profit share</span>
+        <span className="font-mono">{deal.profit_share_bps / 100}% verified revenue share</span>
       </div>
     </button>
   );

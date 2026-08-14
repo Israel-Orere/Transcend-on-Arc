@@ -5,10 +5,8 @@ import { formatUSDC, toUSDCUnits, shortAddr, dealStatusColor, MILESTONE_STATUS }
 import { Stamp } from "./Stamp";
 import { keccak256, toBytes, zeroAddress } from "viem";
 
-function MilestoneRow({ milestone, dealId, wallet, onAction, busy }) {
+function MilestoneRow({ milestone, onAction, busy }) {
   const statusLabel = MILESTONE_STATUS[milestone.status] || "Pending";
-  const isBusiness = wallet.address; // fine-grained role checks happen on-chain; UI just offers the buttons
-
   return (
     <div className="rounded-lg border border-ink/10 bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -66,7 +64,7 @@ function MilestoneRow({ milestone, dealId, wallet, onAction, busy }) {
             onClick={() => onAction("confirmReceipt", milestone.milestone_index)}
             className="rounded-full border border-ink/20 px-3 py-1.5 text-xs font-medium hover:bg-paper-dim disabled:opacity-50"
           >
-            Confirm receipt (payee)
+            Confirm order / fulfilment (payee)
           </button>
         )}
         {milestone.status === 2 && (
@@ -88,7 +86,7 @@ export function DealDetail({ dealId, wallet, onBack }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [investAmount, setInvestAmount] = useState("");
-  const [repayAmount, setRepayAmount] = useState("");
+  const [grossRevenue, setGrossRevenue] = useState("");
 
   const refresh = useCallback(() => {
     return api.deal(dealId).then(setDeal).catch((e) => setError(e.message));
@@ -154,17 +152,34 @@ export function DealDetail({ dealId, wallet, onBack }) {
       )
     );
 
-  const handleRemit = () =>
-    runAction(() =>
-      poolActions.remitProfit(
+  const handleSubmitRevenue = () => {
+    const evidenceHash = keccak256(toBytes(`revenue-${dealId}-${Date.now()}`));
+    return runAction(() =>
+      poolActions.submitRevenueReport(
         wallet.walletClient,
         wallet.publicClient,
         wallet.config.investmentPool,
-        wallet.config.usdc,
         dealId,
-        toUSDCUnits(repayAmount)
+        toUSDCUnits(grossRevenue),
+        evidenceHash
       )
     );
+  };
+
+  const handleAttestRevenue = () =>
+    runAction(() => poolActions.attestRevenueReport(
+      wallet.walletClient, wallet.publicClient, wallet.config.investmentPool, dealId
+    ));
+
+  const handleSettleRevenue = (amountDue) =>
+    runAction(() => poolActions.settleRevenueShare(
+      wallet.walletClient,
+      wallet.publicClient,
+      wallet.config.investmentPool,
+      wallet.config.usdc,
+      dealId,
+      BigInt(amountDue)
+    ));
 
   const handleWithdraw = () =>
     runAction(() => poolActions.withdraw(wallet.walletClient, wallet.publicClient, wallet.config.investmentPool, dealId));
@@ -181,15 +196,18 @@ export function DealDetail({ dealId, wallet, onBack }) {
   }
 
   const pct = deal.target_amount === "0" ? 0 : Math.round((Number(deal.raised_amount) / Number(deal.target_amount)) * 100);
+  const currentPeriod = Number(deal.repayments_made || 0) + 1;
+  const currentReport = deal.revenue_reports?.find((r) => Number(r.period) === currentPeriod);
 
   return (
-    <div className="mx-auto max-w-3xl px-5 py-10">
+    <div className="page-shell max-w-6xl py-10">
       <button onClick={onBack} className="text-sm text-ink-soft hover:text-ink">
         ← Back to marketplace
       </button>
 
-      <div className="mt-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="deal-heading mt-5">
         <div>
+          <div className="page-kicker">Controlled growth deal · Arc #{deal.deal_id}</div>
           <h1 className="font-display text-3xl font-semibold tracking-tight">
             {deal.business?.business_name || shortAddr(deal.business_address)}
           </h1>
@@ -202,14 +220,16 @@ export function DealDetail({ dealId, wallet, onBack }) {
         </span>
       </div>
 
-      {deal.profile?.pitch && <p className="mt-4 max-w-xl text-ink-soft">{deal.profile.pitch}</p>}
+      {deal.profile?.pitch && <p className="mt-4 max-w-2xl text-lg leading-relaxed text-ink-soft">{deal.profile.pitch}</p>}
 
-      <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="mt-7 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Target" value={`$${formatUSDC(deal.target_amount)}`} />
         <Stat label="Raised" value={`$${formatUSDC(deal.raised_amount)} (${pct}%)`} />
         <Stat label="Collateral" value={`$${formatUSDC(deal.collateral_amount)}`} />
-        <Stat label="Profit share" value={`${deal.profit_share_bps / 100}%`} />
+        <Stat label="Verified revenue share" value={`${deal.profit_share_bps / 100}%`} />
       </div>
+
+      <ProtectionSnapshot deal={deal} />
 
       {deal.status_name === "Raising" && (
         <div className="mt-6 flex flex-wrap items-center gap-2 rounded-xl border border-ink/10 bg-white p-4">
@@ -233,22 +253,21 @@ export function DealDetail({ dealId, wallet, onBack }) {
       )}
 
       {deal.status_name === "Repaying" && (
-        <div className="mt-6 flex flex-wrap items-center gap-2 rounded-xl border border-ink/10 bg-white p-4">
-          <input
-            type="text"
-            inputMode="decimal"
-            placeholder="Repayment amount (USDC)"
-            value={repayAmount}
-            onChange={(e) => setRepayAmount(e.target.value)}
-            className="w-48 rounded-lg border border-ink/15 px-3 py-2 font-mono text-sm"
-          />
-          <button
-            disabled={busy || !repayAmount}
-            onClick={handleRemit}
-            className="rounded-full bg-ink px-4 py-2 text-sm font-medium text-paper disabled:opacity-50"
-          >
-            Remit profit share (business)
-          </button>
+        <div className="surface mt-7 p-5">
+          <div className="section-label">Revenue period {currentPeriod}</div>
+          <h2 className="mt-1 font-display text-xl font-semibold">Contract-calculated distribution</h2>
+          <p className="mt-1 max-w-2xl text-sm text-ink-soft">The merchant reports gross collections with a private evidence commitment. An assigned verifier confirms the period, then the contract calculates the exact investor share.</p>
+          <div className="revenue-steps mt-5">
+            <div className={currentReport ? "revenue-step complete" : "revenue-step active"}><b>1</b><span><strong>Submit collections</strong><small>{currentReport ? `$${formatUSDC(currentReport.gross_revenue_usdc)} reported` : "Merchant + evidence hash"}</small></span></div>
+            <div className={currentReport?.attested ? "revenue-step complete" : currentReport ? "revenue-step active" : "revenue-step"}><b>2</b><span><strong>Independent attestation</strong><small>{currentReport?.attested ? "Verifier approved" : "Cannot be self-approved"}</small></span></div>
+            <div className={currentReport?.settled ? "revenue-step complete" : currentReport?.attested ? "revenue-step active" : "revenue-step"}><b>3</b><span><strong>Settle exact share</strong><small>{currentReport ? `$${formatUSDC(currentReport.amount_due_usdc)} due` : `${deal.profit_share_bps / 100}% of verified collections`}</small></span></div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {!currentReport && <><input type="text" inputMode="decimal" placeholder="Gross collections (USDC)" value={grossRevenue} onChange={(e) => setGrossRevenue(e.target.value)} className="input-compact"/><button disabled={busy || !grossRevenue} onClick={handleSubmitRevenue} className="button-primary">Submit report (merchant)</button></>}
+            {currentReport && !currentReport.attested && <button disabled={busy} onClick={handleAttestRevenue} className="button-secondary">Attest report (verifier)</button>}
+            {currentReport?.attested && !currentReport.settled && <button disabled={busy} onClick={() => handleSettleRevenue(currentReport.amount_due_usdc)} className="button-primary">Pay ${formatUSDC(currentReport.amount_due_usdc)} (merchant)</button>}
+            {currentReport?.settled ? <span className="tag tag-ok">Period settled on Arc</span> : null}
+          </div>
         </div>
       )}
 
@@ -268,13 +287,13 @@ export function DealDetail({ dealId, wallet, onBack }) {
           <MilestoneRow
             key={m.milestone_index}
             milestone={m}
-            dealId={dealId}
-            wallet={wallet}
             onAction={handleMilestoneAction}
             busy={busy}
           />
         ))}
       </div>
+
+      <SupplierReferences endorsements={deal.endorsements || []} />
 
       {error && <div className="mt-4 rounded-lg bg-risk/10 px-4 py-3 text-sm text-risk">{error}</div>}
     </div>
@@ -288,4 +307,24 @@ function Stat({ label, value }) {
       <div className="text-[11px] text-ink-soft">{label}</div>
     </div>
   );
+}
+
+function ProtectionSnapshot({ deal }) {
+  const business = deal.business || {};
+  const traceable = Number(business.disbursed_traceable_usdc || 0);
+  const untraceable = Number(business.disbursed_untraceable_usdc || 0);
+  const tracePct = traceable + untraceable > 0 ? Math.round((traceable / (traceable + untraceable)) * 100) : 100;
+  const controls = [
+    [business.verified ? "Verified" : "Pending", "Business identity", business.verified ? "ok" : "warn"],
+    [`$${formatUSDC(deal.collateral_amount)}`, "Merchant collateral", "ok"],
+    [`${deal.milestones?.length || 0} tranches`, "Staged disbursement", "ok"],
+    [`${tracePct}%`, "Historic traceable releases", tracePct >= 70 ? "ok" : "warn"],
+    [`${deal.endorsements?.filter((e) => !e.revoked && !e.related_party).length || 0}`, "Independent supplier references", "neutral"],
+    [deal.paused ? "Paused" : "Clear", "Emergency state", deal.paused ? "risk" : "ok"],
+  ];
+  return <section className="protection-snapshot mt-7"><div><div className="section-label light">Protection snapshot</div><h2>Know what protects you before investing.</h2><p>Controls reduce loss severity; they do not turn business investment into a guaranteed product.</p></div><div className="snapshot-grid">{controls.map(([value,label,tone]) => <div key={label} className={`snapshot-item ${tone}`}><strong>{value}</strong><span>{label}</span></div>)}</div></section>;
+}
+
+function SupplierReferences({ endorsements }) {
+  return <section className="mt-10"><div className="section-label">Commercial reputation</div><h2 className="mt-1 font-display text-xl font-semibold">Supplier references with consequences</h2><p className="mt-1 max-w-2xl text-sm text-ink-soft">These are evidence-backed references, not anonymous votes. Related parties contribute zero weight and independent endorsers are penalised if the merchant later defaults.</p><div className="mt-4 grid gap-3 sm:grid-cols-2">{endorsements.length === 0 ? <div className="empty-card">No supplier references indexed for this merchant.</div> : endorsements.map((e) => <article className="reference-card" key={e.supplier_address}><div className="flex items-start justify-between gap-3"><div><strong>{e.supplier_name || shortAddr(e.supplier_address)}</strong><span>{e.supplier_category || "Verified supplier"}</span></div><b>{e.related_party ? "0" : e.supplier_current_weight || e.weight_at_issue}</b></div><div className="mt-4 flex flex-wrap gap-2"><span className={e.related_party ? "tag tag-warn" : "tag tag-ok"}>{e.related_party ? "Related party" : "Independent"}</span><span className="tag">{e.relationship_months} months</span><span className="tag">{e.rating}/5 trading record</span>{e.revoked ? <span className="tag tag-risk">Revoked</span> : null}</div></article>)}</div></section>;
 }
