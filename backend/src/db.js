@@ -6,7 +6,12 @@
 const { DatabaseSync } = require("node:sqlite");
 const path = require("path");
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, "..", "transcend.db");
+// Vercel Functions only expose /tmp as writable storage. On-chain state is
+// rebuilt there from DEPLOYMENT_BLOCK on a cold start. Applications/profiles
+// still require a durable database before this prototype becomes production.
+const DB_PATH = process.env.DB_PATH || (process.env.VERCEL
+  ? path.join("/tmp", "transcend.db")
+  : path.join(__dirname, "..", "transcend.db"));
 
 const rawDb = new DatabaseSync(DB_PATH);
 rawDb.exec("PRAGMA journal_mode = WAL");

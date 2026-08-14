@@ -5,6 +5,7 @@ const { businessRegistry: REGISTRY_ADDRESS, investmentPool: POOL_ADDRESS } = loa
 
 const POLL_INTERVAL_MS = Number(process.env.INDEXER_POLL_MS || 3000);
 const MAX_BLOCK_RANGE = 2000n; // chunk large backfills to stay under RPC log-range limits
+const DEPLOYMENT_BLOCK = Math.max(0, Number(process.env.DEPLOYMENT_BLOCK || 0));
 
 async function ensureDeploymentState() {
   const [chainId, genesis] = await Promise.all([
@@ -23,7 +24,7 @@ async function ensureDeploymentState() {
       "businesses", "verifiers", "supplier_reputations", "supplier_endorsements",
       "underwriting_reports", "deals", "milestones", "investments", "revenue_reports",
     ]) db.prepare(`DELETE FROM ${table}`).run();
-    db.prepare("UPDATE indexer_state SET last_block = 0 WHERE id = 1").run();
+    db.prepare("UPDATE indexer_state SET last_block = ? WHERE id = 1").run(Math.max(0, DEPLOYMENT_BLOCK - 1));
     db.prepare(
       `INSERT INTO deployment_state (id, fingerprint, updated_at) VALUES (1, ?, ?)
        ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint, updated_at=excluded.updated_at`

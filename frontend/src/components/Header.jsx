@@ -8,7 +8,7 @@ const ROLE_LABELS = {
 };
 
 export function Header({ role, onSwitchRole, onGoHome, onProtection, wallet }) {
-  const { address, connecting, connect, disconnect, error } = wallet;
+  const { address, connecting, connect, disconnect, error, config } = wallet;
 
   return (
     <header className="sticky top-0 z-20 border-b border-ink/10 bg-paper/92 backdrop-blur-xl">
@@ -42,7 +42,8 @@ export function Header({ role, onSwitchRole, onGoHome, onProtection, wallet }) {
           ) : (
             <button
               onClick={connect}
-              disabled={connecting}
+              disabled={connecting || (config && !config.deploymentReady)}
+              title={config && !config.deploymentReady ? "Arc contracts awaiting deployment" : "Connect wallet"}
               className="rounded-full bg-ink px-4 py-1.5 text-sm font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {connecting ? "Connecting…" : "Connect wallet"}

@@ -49,6 +49,13 @@ export default function App() {
     <div className="min-h-screen">
       <Header role={role} onSwitchRole={switchRole} onGoHome={goHome} onProtection={() => setShowProtection(true)} wallet={wallet} />
 
+      {wallet.config && !wallet.config.deploymentReady && (
+        <div className="deployment-banner" role="status">
+          <strong>Arc Testnet deployment pending</strong>
+          <span>The hosted interface is on chain ID 5042002, but transactions stay disabled until the registry and pool are deployed.</span>
+        </div>
+      )}
+
       {showProtection ? (
         <ProtectionCenter onBrowse={() => { setShowProtection(false); if (!role) setRole("investor"); }} />
       ) : !role ? (

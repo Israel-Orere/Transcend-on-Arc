@@ -5,7 +5,7 @@ import InvestmentPoolArtifact from "../abi/InvestmentPool.json";
 export const BusinessRegistryABI = BusinessRegistryArtifact.abi;
 export const InvestmentPoolABI = InvestmentPoolArtifact.abi;
 
-export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
+export const API_BASE = import.meta.env.VITE_API_BASE || (import.meta.env.PROD ? "/api" : "http://localhost:4000");
 
 // Fetched once at app start from the backend's /config, which knows the
 // live deployment addresses (local seed file or Arc Testnet env vars).
@@ -20,11 +20,12 @@ export async function loadRuntimeConfig() {
     cachedConfig = await res.json();
   } catch {
     cachedConfig = {
-      chainId: Number(import.meta.env.VITE_CHAIN_ID || 31337),
-      rpcUrl: import.meta.env.VITE_RPC_URL || "http://127.0.0.1:8545",
-      usdc: import.meta.env.VITE_USDC_ADDRESS || null,
+      chainId: Number(import.meta.env.VITE_CHAIN_ID || (import.meta.env.PROD ? 5042002 : 31337)),
+      rpcUrl: import.meta.env.VITE_RPC_URL || (import.meta.env.PROD ? "https://rpc.testnet.arc.io" : "http://127.0.0.1:8545"),
+      usdc: import.meta.env.VITE_USDC_ADDRESS || (import.meta.env.PROD ? "0x3600000000000000000000000000000000000000" : null),
       businessRegistry: import.meta.env.VITE_BUSINESS_REGISTRY_ADDRESS || null,
       investmentPool: import.meta.env.VITE_INVESTMENT_POOL_ADDRESS || null,
+      deploymentReady: Boolean(import.meta.env.VITE_BUSINESS_REGISTRY_ADDRESS && import.meta.env.VITE_INVESTMENT_POOL_ADDRESS),
     };
   }
   return cachedConfig;
