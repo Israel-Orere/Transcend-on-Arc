@@ -38,6 +38,8 @@ export function BusinessDashboard({ wallet, onOpenDeal }) {
     );
   }
 
+  const [justRegistered, setJustRegistered] = useState(false);
+
   const handleRegister = async () => {
     setBusy(true);
     setError(null);
@@ -50,10 +52,24 @@ export function BusinessDashboard({ wallet, onOpenDeal }) {
         country: regForm.country,
         regNumberHash,
       });
-      setNotice("Registered. An admin/verifier must confirm your documents before you can raise.");
-      const b = await api.business(wallet.address).catch(() => null);
-      setBusiness(b);
+      // The transaction is confirmed on-chain at this point, but the
+      // backend's indexer polls on an interval and may not have caught up
+      // yet. Hide the registration form immediately (so it can't be
+      // accidentally re-submitted, which would revert with
+      // "AlreadyRegistered"), and poll until the backend reflects it.
+      setJustRegistered(true);
+      setNotice("Registered on-chain. Waiting for it to show up here (a few seconds)…");
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const b = await api.business(wallet.address).catch(() => null);
+        if (b) {
+          setBusiness(b);
+          setNotice("Registered. An admin/verifier must confirm your documents before you can raise.");
+          break;
+        }
+      }
     } catch (e) {
+      setJustRegistered(false);
       setError(e.shortMessage || e.message);
     } finally {
       setBusy(false);
@@ -95,9 +111,16 @@ export function BusinessDashboard({ wallet, onOpenDeal }) {
         milestonePayees: dealForm.milestones.map((m) => (m.payee ? m.payee : zeroAddress)),
         repaymentCapUSDC: toUSDCUnits(dealForm.repaymentCap || "0"),
       });
-      setNotice("Deal created. It's live on the marketplace once investors start funding it.");
-      const b = await api.business(wallet.address).catch(() => null);
-      setBusiness(b);
+      setNotice("Deal created on-chain. Waiting for it to appear here (a few seconds)…");
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const b = await api.business(wallet.address).catch(() => null);
+        if (b && b.deals?.length > (business?.deals?.length || 0)) {
+          setBusiness(b);
+          setNotice("Deal created. It's live on the marketplace once investors start funding it.");
+          break;
+        }
+      }
     } catch (e) {
       setError(e.shortMessage || e.message);
     } finally {
@@ -112,7 +135,11 @@ export function BusinessDashboard({ wallet, onOpenDeal }) {
       {notice && <div className="mt-4 rounded-lg bg-verified/10 px-4 py-3 text-sm text-verified">{notice}</div>}
       {error && <div className="mt-4 rounded-lg bg-risk/10 px-4 py-3 text-sm text-risk">{error}</div>}
 
-      {!business ? (
+      {justRegistered && !business ? (
+        <div className="mt-8 rounded-xl border border-ink/10 bg-white p-6 text-center text-ink-soft">
+          Confirming your registration… this updates automatically in a few seconds.
+        </div>
+      ) : !business ? (
         <section className="mt-8 rounded-xl border border-ink/10 bg-white p-6">
           <h2 className="font-display text-xl font-semibold">Register your business</h2>
           <p className="mt-1 text-sm text-ink-soft">

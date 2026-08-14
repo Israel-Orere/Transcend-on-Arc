@@ -91,7 +91,7 @@ export function DealDetail({ dealId, wallet, onBack }) {
   const [repayAmount, setRepayAmount] = useState("");
 
   const refresh = useCallback(() => {
-    api.deal(dealId).then(setDeal).catch((e) => setError(e.message));
+    return api.deal(dealId).then(setDeal).catch((e) => setError(e.message));
   }, [dealId]);
 
   useEffect(() => {
@@ -107,8 +107,13 @@ export function DealDetail({ dealId, wallet, onBack }) {
     setError(null);
     try {
       await fn();
-      await new Promise((r) => setTimeout(r, 1500)); // let the indexer catch up
-      refresh();
+      // The tx is confirmed on-chain here, but the backend indexer polls on
+      // an interval and may not have caught up on the first check -- retry
+      // a few times rather than a single fixed wait that can race it.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await new Promise((r) => setTimeout(r, 1200));
+        await refresh();
+      }
     } catch (e) {
       setError(e.shortMessage || e.message || String(e));
     } finally {
