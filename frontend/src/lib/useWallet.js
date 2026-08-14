@@ -24,11 +24,23 @@ export function useWallet() {
     setError(null);
     try {
       if (!window.ethereum) throw new Error("No injected wallet found. Install MetaMask or a similar wallet.");
-      await ensureCorrectChain(config);
+      // Request account access FIRST. Some wallets won't reliably surface the
+      // "add network" approval popup for a site that doesn't have account
+      // permission yet, which otherwise looks like the popup silently never
+      // appeared.
       const [acct] = await window.ethereum.request({ method: "eth_requestAccounts" });
+      await ensureCorrectChain(config);
       setAddress(acct);
     } catch (err) {
-      setError(err.message || String(err));
+      if (err.code === 4902 || /Unrecognized chain/i.test(err.message || "")) {
+        setError(
+          `Your wallet doesn't recognize this network yet. Open MetaMask, click the network dropdown, ` +
+            `"Add a custom network", and enter Chain ID ${config.chainId}, RPC URL ${config.rpcUrl}, ` +
+            `Currency symbol USDC -- then try connecting again.`
+        );
+      } else {
+        setError(err.message || String(err));
+      }
     } finally {
       setConnecting(false);
     }
