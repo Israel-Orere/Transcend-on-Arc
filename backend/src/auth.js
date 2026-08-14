@@ -8,7 +8,7 @@ const MAX_SIGNATURE_AGE_MS = 5 * 60 * 1000; // 5 minutes, to bound replay window
 /// a credential -- ownership IS the private key.
 ///
 /// Expected body: { address, message, signature }
-/// where message must be exactly `Update Transcend profile for ${address} at ${timestampMs}`
+/// where message must be exactly `Update Transcend profile/application for ${address} at ${timestampMs}`
 /// and timestampMs must be within MAX_SIGNATURE_AGE_MS of now.
 async function requireWalletSignature(req, res, next) {
   const { address, message, signature } = req.body || {};
@@ -16,7 +16,7 @@ async function requireWalletSignature(req, res, next) {
     return res.status(400).json({ error: "address, message, and signature are required" });
   }
 
-  const match = message.match(/^Update Transcend profile for (0x[a-fA-F0-9]{40}) at (\d+)$/);
+  const match = message.match(/^Update Transcend (?:profile|application) for (0x[a-fA-F0-9]{40}) at (\d+)$/);
   if (!match) {
     return res.status(400).json({ error: "Malformed signed message" });
   }

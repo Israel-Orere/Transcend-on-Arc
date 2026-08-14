@@ -10,6 +10,8 @@ const dealsRouter = require("./src/routes/deals");
 const verifiersRouter = require("./src/routes/verifiers");
 const profileRouter = require("./src/routes/profile");
 const investorsRouter = require("./src/routes/investors");
+const applicationsRouter = require("./src/routes/applications");
+const marketRouter = require("./src/routes/market");
 
 const app = express();
 app.use(cors());
@@ -32,6 +34,8 @@ app.use("/deals", dealsRouter);
 app.use("/verifiers", verifiersRouter);
 app.use("/profiles", profileRouter);
 app.use("/investors", investorsRouter);
+app.use("/applications", applicationsRouter);
+app.use("/market", marketRouter);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {

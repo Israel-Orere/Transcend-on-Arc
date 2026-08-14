@@ -78,6 +78,13 @@ export const registryActions = {
       functionName: "registerBusiness",
       args: [name, category, city, country, regNumberHash],
     }),
+  verifyBusiness: (walletClient, publicClient, registryAddr, business) =>
+    send(walletClient, publicClient, {
+      address: registryAddr,
+      abi: BusinessRegistryABI,
+      functionName: "verifyBusiness",
+      args: [business],
+    }),
   endorseMerchant: (
     walletClient,
     publicClient,
@@ -97,6 +104,21 @@ export const registryActions = {
       functionName: "revokeSupplierEndorsement",
       args: [merchant],
     }),
+  publishUnderwritingReport: (
+    walletClient,
+    publicClient,
+    registryAddr,
+    { business, dataRoomHash, reportHash, verifiedRevenueUSDC, grossProfitUSDC, ebitdaUSDC,
+      averageMonthlyBankInflowsUSDC, existingDebtUSDC, bankCoverageBps, cashFlowStabilityBps,
+      statementMonths, riskGrade, validUntil, decision }
+  ) => send(walletClient, publicClient, {
+    address: registryAddr,
+    abi: BusinessRegistryABI,
+    functionName: "publishUnderwritingReport",
+    args: [business, dataRoomHash, reportHash, verifiedRevenueUSDC, grossProfitUSDC, ebitdaUSDC,
+      averageMonthlyBankInflowsUSDC, existingDebtUSDC, bankCoverageBps, cashFlowStabilityBps,
+      statementMonths, riskGrade, validUntil, decision],
+  }),
 };
 
 export const poolActions = {

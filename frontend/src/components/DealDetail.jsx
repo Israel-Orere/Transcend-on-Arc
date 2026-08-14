@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "../lib/api";
 import { poolActions } from "../lib/contracts";
-import { formatUSDC, toUSDCUnits, shortAddr, dealStatusColor, MILESTONE_STATUS } from "../lib/format";
+import { formatUSDC, toUSDCUnits, shortAddr, dealStatusColor, MILESTONE_STATUS, riskGradeLabel, formatPercentBps } from "../lib/format";
 import { Stamp } from "./Stamp";
 import { keccak256, toBytes, zeroAddress } from "viem";
 
@@ -229,6 +229,8 @@ export function DealDetail({ dealId, wallet, onBack }) {
         <Stat label="Verified revenue share" value={`${deal.profit_share_bps / 100}%`} />
       </div>
 
+      <UnderwritingProfile deal={deal} />
+
       <ProtectionSnapshot deal={deal} />
 
       {deal.status_name === "Raising" && (
@@ -308,6 +310,18 @@ function Stat({ label, value }) {
     </div>
   );
 }
+
+function UnderwritingProfile({ deal }) {
+  const report = deal.underwriting;
+  if (!report) return null;
+  const revenue = Number(report.verified_revenue_usdc || 0);
+  const margin = revenue ? Math.round(Number(report.ebitda_usdc || 0) / revenue * 1000) / 10 : 0;
+  const maturity = deal.application?.maturity_months || (deal.repayment_interval_seconds && deal.num_repayments
+    ? Math.round(deal.repayment_interval_seconds * deal.num_repayments / 2_592_000) : null);
+  return <section className="underwriting-profile mt-7"><div className="underwriting-summary"><div className="section-label light">Independent underwriting</div><div className="underwriting-grade"><strong>{riskGradeLabel(report.risk_grade)}</strong><span>risk grade</span></div><h2>Financial health, not follower count.</h2><p>{report.statement_months} months of operating records reviewed by {report.underwriter_name}. The private evidence room is committed by hash; investors see normalized results, not customer bank data.</p><div className="report-proof">Report {shortAddr(report.report_hash)} · valid until {new Date(report.valid_until * 1000).toLocaleDateString()}</div></div><div className="pnl-panel"><div className="pnl-head"><span>VERIFIED TRAILING FINANCIALS</span><b>USDC EQUIVALENT</b></div><PnlRow label="Revenue" reported={deal.application?.reported_revenue_usdc} verified={report.verified_revenue_usdc}/><PnlRow label="Gross profit" reported={deal.application?.reported_gross_profit_usdc} verified={report.gross_profit_usdc}/><PnlRow label="EBITDA" reported={deal.application?.reported_ebitda_usdc} verified={report.ebitda_usdc}/><div className="pnl-quality"><div><span>EBITDA margin</span><strong>{margin}%</strong></div><div><span>Bank coverage</span><strong>{formatPercentBps(report.bank_coverage_bps)}</strong></div><div><span>Cash stability</span><strong>{formatPercentBps(report.cash_flow_stability_bps)}</strong></div><div><span>Target maturity</span><strong>{maturity ? `${maturity} mo` : "—"}</strong></div></div></div></section>;
+}
+
+function PnlRow({ label, reported, verified }) { const variance = reported && BigInt(reported) > 0n ? Math.round((Number(verified) / Number(reported) - 1) * 100) : null; return <div className="pnl-row"><span>{label}</span><small>{reported ? `$${formatUSDC(reported)} reported` : "No management comparison"}</small><strong>${formatUSDC(verified)}</strong><em>{variance == null ? "verified" : `${variance > 0 ? "+" : ""}${variance}% vs reported`}</em></div>; }
 
 function ProtectionSnapshot({ deal }) {
   const business = deal.business || {};

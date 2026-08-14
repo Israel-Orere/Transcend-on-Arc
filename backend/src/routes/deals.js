@@ -43,6 +43,15 @@ router.get("/:id", (req, res) => {
   const revenueReports = db.prepare(
     "SELECT * FROM revenue_reports WHERE deal_id = ? ORDER BY period ASC"
   ).all(req.params.id);
+  const underwriting = db.prepare(
+    "SELECT * FROM underwriting_reports WHERE business_address = ?"
+  ).get(deal.business_address);
+  const application = db.prepare(
+    `SELECT legal_name, sector, city, country, years_operating, employees, requested_usdc,
+       use_of_funds, maturity_months, reported_revenue_usdc, reported_gross_profit_usdc,
+       reported_ebitda_usdc, existing_debt_usdc, status
+     FROM applications WHERE business_address = ?`
+  ).get(deal.business_address);
   res.json({
     ...deal,
     status_name: STATUS_NAMES[deal.status],
@@ -52,6 +61,8 @@ router.get("/:id", (req, res) => {
     profile: profile || null,
     endorsements,
     revenue_reports: revenueReports,
+    underwriting: underwriting || null,
+    application: application || null,
   });
 });
 

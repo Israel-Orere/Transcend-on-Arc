@@ -17,6 +17,8 @@ async function put(path, body) {
 }
 
 export const api = {
+  market: () => get(`/market`),
+  marketOverview: () => get(`/market/overview`),
   deals: (status) => get(`/deals${status ? `?status=${status}` : ""}`),
   deal: (id) => get(`/deals/${id}`),
   businesses: () => get(`/businesses`),
@@ -26,4 +28,7 @@ export const api = {
   profile: (address) => get(`/profiles/${address}`),
   updateProfile: (address, payload) => put(`/profiles/${address}`, payload),
   investorPortfolio: (address) => get(`/investors/${address}`),
+  applications: () => get(`/applications`),
+  application: (address) => get(`/applications/${address}`),
+  submitApplication: (address, payload) => put(`/applications/${address}`, payload),
 };

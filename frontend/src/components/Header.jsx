@@ -3,7 +3,7 @@ import { shortAddr } from "../lib/format";
 const ROLE_LABELS = {
   investor: "Investor",
   business: "Business",
-  verifier: "Verifier",
+  verifier: "Underwriter",
   supplier: "Supplier",
 };
 

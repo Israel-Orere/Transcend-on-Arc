@@ -1,13 +1,32 @@
 # Transcend
 
-Verified capital for African MSMEs, built on [Arc](https://docs.arc.network) — a USDC-native,
-sub-second-finality L1.
+Africa's onchain private market for proven local businesses, built on
+[Arc](https://docs.arc.network).
 
-Transcend connects investors to established small businesses on a milestone-gated,
-capped revenue-share basis. Instead of handing a business a lump sum and hoping,
-capital releases in tranches — each one confirmed by an independent verifier, and
-often by the on-chain counterparty fulfilling it — before investors vote to
-release it.
+Transcend lets investors discover, compare and fund independently underwritten
+African businesses. It borrows the useful parts of a stock market—comparable
+company profiles, ranked financial health, watchlists, clear terms and performance
+history—without pretending these private businesses issue liquid public shares.
+The hackathon instrument is a time-bound, capped share of verified collections.
+Capital sits in USDC escrow and releases through evidence-backed milestones.
+
+## The market thesis
+
+A local business does not reach the market because it connected a wallet or earned
+social upvotes. It must submit operating records, pass local identity/operations
+checks, have its bank flows and reported P&L reconciled, and receive a time-limited
+underwriting approval. Investors see the normalized output—not private customer
+records—and can compare:
+
+- verified revenue, gross profit, EBITDA and margin;
+- bank-statement coverage and cash-flow stability;
+- funding ask, funding progress, revenue-share terms and maturity;
+- risk grade, underwriter identity, report validity and onchain commitments;
+- supplier references, prior deals, defaults and traceable disbursement history.
+
+The market board is the default UI. Only currently approved, unfrozen businesses
+appear in its rankings. Supplier references add accountable commercial context but
+never override a weak or missing underwriting report.
 
 This README covers: what's actually built, why it's built this way, what's still a
 known gap, and how to run it.
@@ -31,9 +50,9 @@ known gap, and how to run it.
 ```
 contracts/   Solidity: BusinessRegistry + InvestmentPool (the escrow/deal engine)
 backend/     Express + SQLite: indexes on-chain events, serves a REST API,
-             and holds the off-chain "private ledger" (pitch text, photos)
-frontend/    Vite + React + viem: marketplace, deal detail, business &
-             verifier dashboards
+             and holds private application/document manifests plus public profiles
+frontend/    Vite + React + viem: ranked market board, company prospectus,
+             business application and independent underwriter workbench
 ```
 
 ### Two ledgers, deliberately
@@ -62,8 +81,10 @@ doesn't pretend otherwise. What the contract *can* do is control how much money 
 exposed before independent confirmation happens, and raise the bar exactly where
 verification gets weaker.
 
-**Layer 1 — Identity.** A business can register freely, but can't raise until an
-admin/verifier confirms it reviewed real documents (e.g. CAC registration).
+**Layer 1 — Identity and market admission.** A business can register freely, but
+can't raise until an active independent underwriter verifies it and publishes a
+current approved report backed by at least six months of evidence. Expired,
+declined or watchlisted reports block new raises at contract level.
 
 **Layer 2 — Sybil resistance.** A hashed registration number can only ever bind to
 one wallet — a defaulted business can't just re-register under a new address.
@@ -127,7 +148,7 @@ an open-ended profit share that's trivially easy to misreport).
 **Emergency brake.** Admin can pause an in-progress deal's entire milestone pipeline
 instantly on a fraud signal, without waiting for a full missed-payment default.
 
-All of this is exercised in `contracts/test/Transcend.test.js` — 23 tests covering
+All of this is exercised in `contracts/test/Transcend.test.js` — 26 tests covering
 the full lifecycle plus every mechanism above, including the specific attacks each
 one closes (self-funding, evidence-hash reuse, verifier self-selection, bare-majority
 exits to untraceable wallets).
@@ -161,7 +182,8 @@ the whole system.
 
 ## Running it locally
 
-Requires Node 18+. All three services run independently; start them in this order.
+Requires Node 22.5+ (the backend uses Node's built-in SQLite). All three services
+run independently; start them in this order.
 
 ### 1. Contracts — local chain + deploy + seed
 
@@ -180,13 +202,13 @@ npx hardhat run scripts/deploy-local.js --network localhost --no-compile
 ```
 
 This deploys `MockUSDC` + `BusinessRegistry` + `InvestmentPool`, registers a demo
-verifier/business/supplier, and seeds one partially-funded demo deal. It writes
+underwriter, four approved businesses and three different partially-funded rounds. It writes
 `backend/deployment.local.json` so the backend auto-discovers the addresses.
 
 Run the test suite any time with:
 
 ```bash
-npm run test   # compiles then runs all 23 tests
+npm run test   # compiles then runs all 26 tests
 ```
 
 ### 2. Backend — indexer + API

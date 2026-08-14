@@ -28,6 +28,13 @@ contract BusinessRegistry {
         Established // 3+ completed deals, no defaults -- highest raise cap
     }
 
+    enum UnderwritingDecision {
+        None,
+        Declined,
+        Approved,
+        Watchlist
+    }
+
     struct Business {
         bool registered;
         bool verified;
@@ -65,9 +72,34 @@ contract BusinessRegistry {
         string name;
         uint256 attestationsGiven;
         uint256 attestationsLinkedToDefault; // attestations whose deal later defaulted
+        uint256 underwritingReportsPublished;
+        uint256 underwritingsLinkedToDefault;
     }
 
     mapping(address => Verifier) public verifiers;
+
+    /// @notice Public, normalized summary of a private underwriting file.
+    /// Raw bank statements and customer data remain encrypted off-chain; their
+    /// commitments make the published summary versioned and tamper-evident.
+    struct UnderwritingReport {
+        address underwriter;
+        bytes32 dataRoomHash;
+        bytes32 reportHash;
+        uint256 verifiedRevenueUSDC;
+        uint256 grossProfitUSDC;
+        uint256 ebitdaUSDC;
+        uint256 averageMonthlyBankInflowsUSDC;
+        uint256 existingDebtUSDC;
+        uint16 bankCoverageBps;
+        uint16 cashFlowStabilityBps;
+        uint8 statementMonths;
+        uint8 riskGrade;
+        uint64 issuedAt;
+        uint64 validUntil;
+        UnderwritingDecision decision;
+    }
+
+    mapping(address => UnderwritingReport) public underwritingReports;
 
     /// @notice A supplier endorsement is an accountable commercial reference,
     /// not a social-media upvote. The supplier must itself be verified, must
@@ -104,6 +136,15 @@ contract BusinessRegistry {
     event VerifierRemoved(address indexed verifier);
     event VerifierAttestationRecorded(address indexed verifier);
     event VerifierDefaultLinked(address indexed verifier);
+    event UnderwritingReportPublished(
+        address indexed business,
+        address indexed underwriter,
+        bytes32 indexed reportHash,
+        UnderwritingDecision decision,
+        uint8 riskGrade,
+        uint64 validUntil
+    );
+    event UnderwritingDefaultLinked(address indexed underwriter, address indexed business);
     event SupplierEndorsed(
         address indexed supplier,
         address indexed merchant,
@@ -122,6 +163,7 @@ contract BusinessRegistry {
     error EndorsementEvidenceReused();
     error NotEndorsementOwner();
     error NotVerifiedSupplier();
+    error InvalidUnderwritingReport();
 
     // Raise caps in USDC (6 decimals) by reputation tier. Admin-tunable so caps
     // can be calibrated as real default-rate data comes in.
@@ -215,6 +257,69 @@ contract BusinessRegistry {
 
     function getVerifier(address verifier) external view returns (Verifier memory) {
         return verifiers[verifier];
+    }
+
+    // ---------- Independent underwriting ----------
+
+    function publishUnderwritingReport(
+        address business,
+        bytes32 dataRoomHash,
+        bytes32 reportHash,
+        uint256 verifiedRevenueUSDC,
+        uint256 grossProfitUSDC,
+        uint256 ebitdaUSDC,
+        uint256 averageMonthlyBankInflowsUSDC,
+        uint256 existingDebtUSDC,
+        uint16 bankCoverageBps,
+        uint16 cashFlowStabilityBps,
+        uint8 statementMonths,
+        uint8 riskGrade,
+        uint64 validUntil,
+        UnderwritingDecision decision
+    ) external {
+        if (msg.sender != admin && !verifiers[msg.sender].active) revert NotActiveVerifier();
+        Business storage b = businesses[business];
+        if (!b.registered || !b.verified) revert NotRegistered();
+        if (
+            msg.sender == business || dataRoomHash == bytes32(0) || reportHash == bytes32(0) || statementMonths < 6
+                || bankCoverageBps > 10_000 || cashFlowStabilityBps > 10_000 || riskGrade == 0 || riskGrade > 5
+                || validUntil <= block.timestamp || validUntil > block.timestamp + 365 days
+                || decision == UnderwritingDecision.None
+        ) revert InvalidUnderwritingReport();
+        if (
+            decision == UnderwritingDecision.Approved
+                && (verifiedRevenueUSDC == 0 || averageMonthlyBankInflowsUSDC == 0
+                    || grossProfitUSDC > verifiedRevenueUSDC || ebitdaUSDC > grossProfitUSDC)
+        ) revert InvalidUnderwritingReport();
+
+        underwritingReports[business] = UnderwritingReport({
+            underwriter: msg.sender,
+            dataRoomHash: dataRoomHash,
+            reportHash: reportHash,
+            verifiedRevenueUSDC: verifiedRevenueUSDC,
+            grossProfitUSDC: grossProfitUSDC,
+            ebitdaUSDC: ebitdaUSDC,
+            averageMonthlyBankInflowsUSDC: averageMonthlyBankInflowsUSDC,
+            existingDebtUSDC: existingDebtUSDC,
+            bankCoverageBps: bankCoverageBps,
+            cashFlowStabilityBps: cashFlowStabilityBps,
+            statementMonths: statementMonths,
+            riskGrade: riskGrade,
+            issuedAt: uint64(block.timestamp),
+            validUntil: validUntil,
+            decision: decision
+        });
+        if (msg.sender != admin) verifiers[msg.sender].underwritingReportsPublished += 1;
+        emit UnderwritingReportPublished(business, msg.sender, reportHash, decision, riskGrade, validUntil);
+    }
+
+    function getUnderwritingReport(address business) external view returns (UnderwritingReport memory) {
+        return underwritingReports[business];
+    }
+
+    function hasCurrentApprovedUnderwriting(address business) public view returns (bool) {
+        UnderwritingReport storage report = underwritingReports[business];
+        return report.decision == UnderwritingDecision.Approved && report.validUntil >= block.timestamp;
     }
 
     // ---------- Accountable supplier endorsements ----------
@@ -383,7 +488,9 @@ contract BusinessRegistry {
 
     /// @notice Admin/verifier attests it reviewed the business's real-world
     /// registration documents off-chain. Required before any deal can be created.
-    function verifyBusiness(address business) external onlyAdmin {
+    function verifyBusiness(address business) external {
+        if (msg.sender != admin && !verifiers[msg.sender].active) revert NotActiveVerifier();
+        if (msg.sender == business) revert NotActiveVerifier();
         Business storage b = businesses[business];
         if (!b.registered) revert NotRegistered();
         if (b.verified) revert AlreadyVerified();
@@ -444,6 +551,11 @@ contract BusinessRegistry {
                 emit SupplierEndorsementDefaultLinked(endorsement.supplier, business);
             }
         }
+        UnderwritingReport storage report = underwritingReports[business];
+        if (report.underwriter != address(0) && report.underwriter != admin) {
+            verifiers[report.underwriter].underwritingsLinkedToDefault += 1;
+            emit UnderwritingDefaultLinked(report.underwriter, business);
+        }
         emit DealDefaultedRecorded(business);
         emit BusinessFrozen(business);
     }
@@ -465,7 +577,7 @@ contract BusinessRegistry {
 
     function canRaise(address business) external view returns (bool) {
         Business storage b = businesses[business];
-        return b.registered && b.verified && !b.frozen;
+        return b.registered && b.verified && !b.frozen && hasCurrentApprovedUnderwriting(business);
     }
 
     function getBusiness(address business) external view returns (Business memory) {
